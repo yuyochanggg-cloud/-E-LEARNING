@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://yuyochanggg.github.io/良興E-LEARNING",
+"homepage": "https://yuyochanggg-cloud.github.io/-E-LEARNING",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

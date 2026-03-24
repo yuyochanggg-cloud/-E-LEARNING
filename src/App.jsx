@@ -7,7 +7,8 @@ import {
   ChevronLeft, FileText, Upload, LayoutDashboard, Library, 
   ShieldCheck, Clock, Flame, Sun, Heart, TrendingUp, Gem,
   Cloud, AlertCircle, Info, ExternalLink, Rocket, BatteryCharging,
-  Briefcase, Users, Target, Map, UploadCloud, Sparkles, Mic
+  Briefcase, Users, Target, Map, UploadCloud, Sparkles, Mic,
+  Lock, Key
 } from 'lucide-react';
 
 import { gasClient } from './utils/gasClient';
@@ -132,9 +133,14 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   
   const [userProfile, setUserProfile] = useState(null); 
-  const [loginInput, setLoginInput] = useState('');     
+  const [loginInput, setLoginInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState(''); // ✨ 新增：密碼狀態     
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState('');     
+
+  const [isFirstLoginMode, setIsFirstLoginMode] = useState(false); // ✨ 新增：控制是否顯示強制換密碼畫面
+  const [newPassword, setNewPassword] = useState(''); // ✨ 新增：新密碼
+  const [confirmPassword, setConfirmPassword] = useState(''); // ✨ 新增：確認新密碼
   
   const [progressData, setProgressData] = useState({
     completedCourses: [],
@@ -270,32 +276,79 @@ const handleCourseComplete = async (badges) => {
   }
 };
 
-  // 🔐 處理登入驗證
-  const handleLogin = async (inputId) => {
-    const targetId = inputId || loginInput;
-    if (!targetId.trim()) {
-      setLoginError('請輸入員工工號');
+  // 🔐 處理登入驗證 (雙重欄位)
+  const handleLogin = async () => {
+    if (!loginInput.trim() || !passwordInput.trim()) {
+      setLoginError('請完整輸入工號與密碼');
       return;
     }
 
     try {
       setIsLoggingIn(true);
       setLoginError('');
-      const response = await gasClient.post('verifyLogin', { userId: targetId.trim() });
-      
+      const response = await gasClient.post('verifyLogin', { 
+        userId: loginInput.trim(),
+        password: passwordInput.trim() 
+      });
+
       if (response.status === 'success') {
         const profile = response.data;
-        setUserProfile(profile);
-        localStorage.setItem('cloud_academy_userId', profile.userId || profile.UserId); 
-        fetchDashboardData(profile.userId || profile.UserId); 
+        
+        // ✨ 企業級資安：攔截首次登入
+        if (profile.isFirstLogin) {
+          setUserProfile(profile); // 暫存身分，但不寫入 LocalStorage，也不抓儀表板資料
+          setIsFirstLoginMode(true); // 切換至強制換密碼畫面
+        } else {
+          // 正常登入
+          setUserProfile(profile);
+          localStorage.setItem('cloud_academy_user', JSON.stringify(profile)); // 升級為快取整個 JSON
+          fetchDashboardData(profile.userId || profile.UserId);
+        }
       } else {
-        setLoginError(response.message || '登入失敗，請檢查工號。');
+        setLoginError(response.message || '登入失敗，請檢查工號與密碼。');
         setIsLoading(false);
       }
     } catch (error) {
       console.error("【登入當機】:", error);
-      setLoginError('連線失敗，請稍後再試。');
+      setLoginError('伺服器連線失敗，請稍後再試。');
       setIsLoading(false);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  // 🛡️ 處理首次登入修改密碼
+  const handleChangePassword = async () => {
+    if (!newPassword || newPassword.length < 4) {
+      setLoginError('新密碼請至少設定 4 位數');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setLoginError('兩次輸入的新密碼不一致，請重新確認');
+      return;
+    }
+
+    try {
+      setIsLoggingIn(true);
+      setLoginError('');
+      const response = await gasClient.post('changePassword', {
+        userId: userProfile.userId || userProfile.UserId,
+        newPassword: newPassword.trim()
+      });
+
+      if (response.status === 'success') {
+        alert('🎉 密碼修改成功！歡迎正式進入良興雲端學院。');
+        // 解除首登狀態，正式放行
+        const updatedProfile = { ...userProfile, isFirstLogin: false };
+        setUserProfile(updatedProfile);
+        localStorage.setItem('cloud_academy_user', JSON.stringify(updatedProfile));
+        setIsFirstLoginMode(false);
+        fetchDashboardData(updatedProfile.userId || updatedProfile.UserId);
+      } else {
+        setLoginError(response.message || '密碼修改失敗');
+      }
+    } catch (error) {
+      setLoginError('伺服器連線異常，請聯繫人資部門');
     } finally {
       setIsLoggingIn(false);
     }
@@ -303,9 +356,26 @@ const handleCourseComplete = async (badges) => {
 
   // 🚪 處理登出
   const handleLogout = () => {
-    localStorage.removeItem('cloud_academy_userId');
-    window.location.reload(); // 登出直接重整最乾淨
+    localStorage.removeItem('cloud_academy_user'); // 清除新版 Token
+    localStorage.removeItem('cloud_academy_userId'); // 兼容並清除舊版
+    window.location.reload(); 
   };
+
+  // 🚀 自動登入檢查 (無密碼快取技術)
+  useEffect(() => {
+    const storedUser = localStorage.getItem('cloud_academy_user');
+    if (storedUser) {
+      try {
+        const profile = JSON.parse(storedUser);
+        setUserProfile(profile);
+        fetchDashboardData(profile.userId || profile.UserId);
+      } catch (e) {
+        setIsLoading(false);
+      }
+    } else {
+      setIsLoading(false);
+    }
+  }, []);
 
   // ==========================================
   // 4. 生命週期與路由
@@ -368,48 +438,116 @@ const handleCourseComplete = async (badges) => {
     );
   }
 
-  if (!userProfile) {
+  if (!userProfile || isFirstLoginMode) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 font-sans">
         <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md flex flex-col items-center border border-slate-100 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-400 opacity-10 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
           <div className="absolute bottom-0 left-0 w-40 h-40 bg-emerald-400 opacity-10 rounded-full blur-3xl -ml-10 -mb-10 pointer-events-none"></div>
+          
           <div className="w-20 h-20 bg-gradient-to-tr from-blue-600 to-indigo-500 text-white rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-blue-500/30 transform -rotate-3 hover:rotate-0 transition-transform">
-            <Cloud size={40} />
+            {isFirstLoginMode ? <Key size={40} /> : <Cloud size={40} />}
           </div>
-          <h1 className="text-3xl font-extrabold text-slate-800 mb-2 text-center tracking-tight">良興雲端學院</h1>
-          <p className="text-slate-500 mb-8 text-center text-sm font-medium">Empowering Your Career Journey</p>
+          
+          <h1 className="text-3xl font-extrabold text-slate-800 mb-2 text-center tracking-tight">
+            {isFirstLoginMode ? '啟動帳號防護' : '良興雲端學院'}
+          </h1>
+          <p className="text-slate-500 mb-8 text-center text-sm font-medium">
+            {isFirstLoginMode ? '首次登入請務必修改您的預設密碼' : 'Empowering Your Career Journey'}
+          </p>
+
           <div className="w-full space-y-5 relative z-10">
-            <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">員工專屬工號</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><ShieldCheck size={20} /></div>
-                <input 
-                  type="text" value={loginInput} onChange={(e) => setLoginInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                  placeholder="請輸入工號 (例: EMP001)" 
-                  className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all font-medium text-slate-700"
-                  disabled={isLoggingIn} autoComplete="off"
-                />
-              </div>
-              {loginError && (
-                <div className="mt-3 flex items-start text-red-500 bg-red-50 p-3 rounded-lg border border-red-100 animate-fade-in">
-                  <AlertCircle size={16} className="mr-2 mt-0.5 flex-shrink-0"/> 
-                  <p className="text-sm font-medium">{loginError}</p>
+            {/* --- 畫面 A：正常登入表單 --- */}
+            {!isFirstLoginMode && (
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">員工專屬工號</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><ShieldCheck size={20} /></div>
+                    <input
+                      type="text" value={loginInput} onChange={(e) => setLoginInput(e.target.value)}
+                      placeholder="請輸入工號 (例: EMP001)"
+                      className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium text-slate-700"
+                      disabled={isLoggingIn} autoComplete="off"
+                    />
+                  </div>
                 </div>
-              )}
-            </div>
-            <button 
-              onClick={() => handleLogin()} disabled={isLoggingIn}
-              className={`w-full py-3.5 rounded-xl font-bold text-white transition-all duration-300 flex justify-center items-center group ${isLoggingIn ? 'bg-blue-400 cursor-not-allowed opacity-70' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-md transform hover:-translate-y-0.5'}`}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">登入密碼</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><Lock size={20} /></div>
+                    <input
+                      type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                      placeholder="請輸入密碼 (預設為生日)"
+                      className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium text-slate-700"
+                      disabled={isLoggingIn}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* --- 畫面 B：首次登入強制換密碼表單 --- */}
+            {isFirstLoginMode && (
+              <>
+                <div className="bg-amber-50 border border-amber-200 text-amber-700 p-3 rounded-xl text-xs font-bold flex items-start mb-4">
+                  <AlertCircle size={16} className="mr-2 mt-0.5 flex-shrink-0"/>
+                  為保障您的學習紀錄與個資安全，系統已暫時攔截登入，請設定專屬您的新密碼。
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">設定新密碼</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><Lock size={20} /></div>
+                    <input
+                      type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="請至少輸入 4 位數"
+                      className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
+                      disabled={isLoggingIn}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">確認新密碼</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><CheckCircle size={20} /></div>
+                    <input
+                      type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChangePassword()}
+                      placeholder="請再次輸入新密碼"
+                      className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
+                      disabled={isLoggingIn}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* --- 錯誤提示區 --- */}
+            {loginError && (
+              <div className="mt-3 flex items-start text-red-500 bg-red-50 p-3 rounded-lg border border-red-100 animate-fade-in">
+                <AlertCircle size={16} className="mr-2 mt-0.5 flex-shrink-0"/>
+                <p className="text-sm font-medium">{loginError}</p>
+              </div>
+            )}
+
+            {/* --- 執行按鈕 --- */}
+            <button
+              onClick={isFirstLoginMode ? handleChangePassword : handleLogin} disabled={isLoggingIn}
+              className={`w-full py-3.5 rounded-xl font-bold text-white transition-all duration-300 flex justify-center items-center group ${isLoggingIn ? 
+                'bg-slate-400 cursor-not-allowed opacity-70' : 
+                isFirstLoginMode ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-md transform hover:-translate-y-0.5'}`}
             >
-              {isLoggingIn ? <><div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div> 驗證身分中...</> : <>進入學院 <ChevronLeft className="w-5 h-5 ml-1 rotate-180 group-hover:translate-x-1 transition-transform" /></>}
+              {isLoggingIn ? (
+                <><div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div> 處理中...</>
+              ) : (
+                isFirstLoginMode ? '確認修改並進入學院' : <>登入驗證 <ChevronLeft className="w-5 h-5 ml-1 rotate-180 group-hover:translate-x-1 transition-transform" /></>
+              )}
             </button>
+            
           </div>
         </div>
       </div>
     );
   }
-
   // ==========================================
   // 6. 登入後主畫面 (Main Render)
   // ==========================================
