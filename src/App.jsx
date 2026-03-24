@@ -286,7 +286,8 @@ const handleCourseComplete = async (badges) => {
     try {
       setIsLoggingIn(true);
       setLoginError('');
-      const response = await gasClient.post('verifyLogin', { 
+      const response = await gasClient.post({ 
+        action: 'verifyLogin',
         userId: loginInput.trim(),
         password: passwordInput.trim() 
       });
@@ -331,7 +332,8 @@ const handleCourseComplete = async (badges) => {
     try {
       setIsLoggingIn(true);
       setLoginError('');
-      const response = await gasClient.post('changePassword', {
+      const response = await gasClient.post({
+        action: 'changePassword',
         userId: userProfile.userId || userProfile.UserId,
         newPassword: newPassword.trim()
       });
