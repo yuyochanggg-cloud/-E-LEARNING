@@ -276,7 +276,7 @@ const handleCourseComplete = async (badges) => {
   }
 };
 
-  // 🔐 處理登入驗證 (雙重欄位)
+ // 🔐 處理登入驗證 (雙重欄位)
   const handleLogin = async () => {
     if (!loginInput.trim() || !passwordInput.trim()) {
       setLoginError('請完整輸入工號與密碼');
@@ -286,11 +286,13 @@ const handleCourseComplete = async (badges) => {
     try {
       setIsLoggingIn(true);
       setLoginError('');
-      const response = await gasClient.post({ 
-        action: 'verifyLogin',
+      
+      // 👇👇👇 CTO 關鍵開刀位置：注意括號的位置！ 👇👇👇
+      const response = await gasClient.post('verifyLogin', { 
         userId: loginInput.trim(),
         password: passwordInput.trim() 
       });
+      // 👆👆👆 已經將 action 獨立為第一個參數 👆👆👆
 
       if (response.status === 'success') {
         const profile = response.data;
@@ -307,18 +309,16 @@ const handleCourseComplete = async (badges) => {
         }
       } else {
         setLoginError(response.message || '登入失敗，請檢查工號與密碼。');
-        setIsLoading(false);
       }
     } catch (error) {
       console.error("【登入當機】:", error);
       setLoginError('伺服器連線失敗，請稍後再試。');
-      setIsLoading(false);
     } finally {
       setIsLoggingIn(false);
     }
   };
 
-  // 🛡️ 處理首次登入修改密碼
+// 🛡️ 處理首次登入修改密碼
   const handleChangePassword = async () => {
     if (!newPassword || newPassword.length < 4) {
       setLoginError('新密碼請至少設定 4 位數');
@@ -332,18 +332,19 @@ const handleCourseComplete = async (badges) => {
     try {
       setIsLoggingIn(true);
       setLoginError('');
-      const response = await gasClient.post({
-        action: 'changePassword',
+      
+      // 👇👇👇 CTO 關鍵開刀位置：注意這裡的括號，已經把 action 獨立出來了 👇👇👇
+      const response = await gasClient.post('changePassword', {
         userId: userProfile.userId || userProfile.UserId,
         newPassword: newPassword.trim()
       });
+      // 👆👆👆 👆👆👆
 
       if (response.status === 'success') {
         alert('🎉 密碼修改成功！歡迎正式進入良興雲端學院。');
-        // 解除首登狀態，正式放行
         const updatedProfile = { ...userProfile, isFirstLogin: false };
         setUserProfile(updatedProfile);
-        localStorage.setItem('cloud_academy_user', JSON.stringify(updatedProfile));
+        localStorage.setItem('cloud_academy_userId', updatedProfile.userId || updatedProfile.UserId);
         setIsFirstLoginMode(false);
         fetchDashboardData(updatedProfile.userId || updatedProfile.UserId);
       } else {
