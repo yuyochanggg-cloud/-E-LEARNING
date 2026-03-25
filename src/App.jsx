@@ -1394,28 +1394,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     );
   };
 
-    // 🎯 路線二：YouTube 影片
-    if (url.includes('youtube.com') || url.includes('youtu.be')) {
-      return (
-        <div className="w-full h-full bg-black relative">
-          <iframe
-            src={url}
-            className="absolute top-0 left-0 w-full h-full border-none"
-            allow="autoplay; fullscreen"
-            loading="lazy"
-          ></iframe>
-        </div>
-      );
-    }
-
-    // 🎯 路線三：純影片或音軌 (包含 Google Drive 直連破解)
-    if (url.includes('drive.google.com/file/d/')) {
-      const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if (match && match[1]) {
-        // 轉為直連檔，啟動原生倍速播放
-        url = `https://drive.google.com/uc?export=download&id=${match[1]}`;
-      }
-    }
+   
 
     return (
       <div className="w-full h-full bg-slate-900 relative flex flex-col items-center justify-center p-4">
@@ -1433,6 +1412,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       </div>
     );
   };
+
   return (
     <div className="animate-fade-in pb-20 max-w-5xl mx-auto px-4">
       {/* 返回導航 */}
