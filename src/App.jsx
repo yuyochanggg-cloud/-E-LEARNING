@@ -380,6 +380,26 @@ const handleCourseComplete = async (badges) => {
     }
   }, []);
 
+  // ⏱️ 處理學習進度與時數更新 (修復全白畫面 Bug)
+  const handleUpdateProgress = async (courseId, spentMinutes) => {
+    console.log(`[學習追蹤] 課程 ${courseId} 累積觀看: ${spentMinutes} 分鐘`);
+    
+    // 防呆：如果沒有學習時間就不呼叫後端，節省 API 額度
+    if (!spentMinutes || spentMinutes <= 0) return;
+
+    try {
+      // 若您原本有寫好更新時數到 GAS 的邏輯，可以放在這邊
+      /* await gasClient.post({
+        action: 'updateProgress',
+        userId: userProfile.userId || userProfile.UserId,
+        courseId: courseId,
+        minutes: spentMinutes
+      });
+      */
+    } catch (error) {
+      console.error("進度更新失敗", error);
+    }
+  };
   // ==========================================
   // 4. 生命週期與路由
   // ==========================================
