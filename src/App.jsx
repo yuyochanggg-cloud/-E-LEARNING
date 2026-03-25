@@ -1394,24 +1394,6 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     );
   };
 
-   
-
-    return (
-      <div className="w-full h-full bg-slate-900 relative flex flex-col items-center justify-center p-4">
-        <video
-          src={url}
-          controls
-          className="w-full max-w-3xl max-h-full shadow-2xl rounded-lg"
-          controlsList="nodownload"
-        >
-          您的瀏覽器不支援原生播放器。
-        </video>
-        <p className="text-slate-400 mt-4 text-sm font-medium">
-          💡 點擊播放器右下角的「⋮」即可調整播放速度
-        </p>
-      </div>
-    );
-  };
 
   return (
     <div className="animate-fade-in pb-20 max-w-5xl mx-auto px-4">
@@ -1580,7 +1562,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       </div>
     </div>
   );
-
+}
 
 function TabButton({ active, onClick, icon, label }) {
   return (
