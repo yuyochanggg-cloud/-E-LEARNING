@@ -1380,26 +1380,19 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     transcript: course.transcript || "暫無逐字稿"
   };
 
- // 7. 渲染播放器 (終極萬能版：支援影片、音檔、Google Slides、文件)
+ // 7. 渲染播放器 (穩定原版：使用 iframe 確保不當機)
   const renderPlayer = () => {
-    let url = safeCourse.materialUrl;
-    if (!url) return <div className="text-white p-10">尚無教材連結</div>;
-
-    // 🎯 路線一：Google Slides 簡報 / Google Docs 文件
-    if (url.includes('docs.google.com')) {
-      //  CTO 自動化魔法：自動把編輯模式 (/edit) 替換成預覽模式 (/preview) 或滿版呈現
-      const embedUrl = url.replace(/\/edit.*$/, '/preview');
-      return (
-        <div className="w-full h-full bg-slate-100 relative">
-          <iframe
-            src={embedUrl}
-            className="absolute top-0 left-0 w-full h-full border-none shadow-inner"
-            allowFullScreen
-            loading="lazy"
-          ></iframe>
-        </div>
-      );
-    }
+    return (
+      <div className="w-full h-full bg-black relative">
+        <iframe
+          src={safeCourse?.materialUrl || ''}
+          className="absolute top-0 left-0 w-full h-full border-none"
+          allow="autoplay; fullscreen"
+          loading="lazy" 
+        ></iframe>
+      </div>
+    );
+  };
 
     // 🎯 路線二：YouTube 影片
     if (url.includes('youtube.com') || url.includes('youtu.be')) {
