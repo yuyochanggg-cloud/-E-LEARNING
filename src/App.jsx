@@ -1380,7 +1380,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     transcript: course.transcript || "暫無逐字稿"
   };
 
- // 7. 渲染播放器 (穩定原版：使用 iframe 確保不當機)
+// 7. 渲染播放器 (穩定原版：使用 iframe 確保不當機)
   const renderPlayer = () => {
     return (
       <div className="w-full h-full bg-black relative">
@@ -1600,7 +1600,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       </div>
     </div>
   );
-}
+
 
 function TabButton({ active, onClick, icon, label }) {
   return (
