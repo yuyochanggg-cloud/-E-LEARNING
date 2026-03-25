@@ -368,7 +368,7 @@ const handleCourseComplete = async (badges) => {
   const handleUpdateProgress = async (courseId, spentMinutes) => {
     console.log(`[學習追蹤] 課程 ${courseId} 累積觀看: ${spentMinutes} 分鐘`);
     
-    // 防呆：如果沒有學習時間就不呼叫後端，節省 API 額度
+    // 防呆：如果沒有學習時間就不呼叫後端，節省 API 額度 
     if (!spentMinutes || spentMinutes <= 0) return;
 
     try {
@@ -1380,22 +1380,66 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     transcript: course.transcript || "暫無逐字稿"
   };
 
-  // 7. 渲染播放器
+ // 7. 渲染播放器 (終極萬能版：支援影片、音檔、Google Slides、文件)
   const renderPlayer = () => {
-    // 使用已經轉換好的 safeCourse.materialUrl
+    let url = safeCourse.materialUrl;
+    if (!url) return <div className="text-white p-10">尚無教材連結</div>;
+
+    // 🎯 路線一：Google Slides 簡報 / Google Docs 文件
+    if (url.includes('docs.google.com')) {
+      //  CTO 自動化魔法：自動把編輯模式 (/edit) 替換成預覽模式 (/preview) 或滿版呈現
+      const embedUrl = url.replace(/\/edit.*$/, '/preview');
+      return (
+        <div className="w-full h-full bg-slate-100 relative">
+          <iframe
+            src={embedUrl}
+            className="absolute top-0 left-0 w-full h-full border-none shadow-inner"
+            allowFullScreen
+            loading="lazy"
+          ></iframe>
+        </div>
+      );
+    }
+
+    // 🎯 路線二：YouTube 影片
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+      return (
+        <div className="w-full h-full bg-black relative">
+          <iframe
+            src={url}
+            className="absolute top-0 left-0 w-full h-full border-none"
+            allow="autoplay; fullscreen"
+            loading="lazy"
+          ></iframe>
+        </div>
+      );
+    }
+
+    // 🎯 路線三：純影片或音軌 (包含 Google Drive 直連破解)
+    if (url.includes('drive.google.com/file/d/')) {
+      const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        // 轉為直連檔，啟動原生倍速播放
+        url = `https://drive.google.com/uc?export=download&id=${match[1]}`;
+      }
+    }
+
     return (
-      <div className="w-full h-full bg-black relative">
-        <iframe
-          src={safeCourse.materialUrl}
-          className="absolute top-0 left-0 w-full h-full border-none"
-          allow="autoplay; fullscreen"
-          // 加入這行可以防止某些瀏覽器跳出下載
-          loading="lazy" 
-        ></iframe>
+      <div className="w-full h-full bg-slate-900 relative flex flex-col items-center justify-center p-4">
+        <video
+          src={url}
+          controls
+          className="w-full max-w-3xl max-h-full shadow-2xl rounded-lg"
+          controlsList="nodownload"
+        >
+          您的瀏覽器不支援原生播放器。
+        </video>
+        <p className="text-slate-400 mt-4 text-sm font-medium">
+          💡 點擊播放器右下角的「⋮」即可調整播放速度
+        </p>
       </div>
     );
   };
-
   return (
     <div className="animate-fade-in pb-20 max-w-5xl mx-auto px-4">
       {/* 返回導航 */}
