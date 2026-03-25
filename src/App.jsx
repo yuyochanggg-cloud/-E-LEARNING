@@ -364,6 +364,21 @@ const handleCourseComplete = async (badges) => {
     window.location.reload(); 
   };
 
+// ⏱️ 處理學習進度與時數更新 (修復全白畫面 Bug)
+  const handleUpdateProgress = async (courseId, spentMinutes) => {
+    console.log(`[學習追蹤] 課程 ${courseId} 累積觀看: ${spentMinutes} 分鐘`);
+    
+    // 防呆：如果沒有學習時間就不呼叫後端，節省 API 額度
+    if (!spentMinutes || spentMinutes <= 0) return;
+
+    try {
+      // 未來若要同步分鐘數到資料庫，請在此呼叫 updateProgress API
+      // 目前先在前端紀錄，避免全白畫面
+    } catch (error) {
+      console.error("進度更新失敗", error);
+    }
+  };
+
   // 🚀 自動登入檢查 (無密碼快取技術)
   useEffect(() => {
     const storedUser = localStorage.getItem('cloud_academy_user');
@@ -380,26 +395,6 @@ const handleCourseComplete = async (badges) => {
     }
   }, []);
 
-  // ⏱️ 處理學習進度與時數更新 (修復全白畫面 Bug)
-  const handleUpdateProgress = async (courseId, spentMinutes) => {
-    console.log(`[學習追蹤] 課程 ${courseId} 累積觀看: ${spentMinutes} 分鐘`);
-    
-    // 防呆：如果沒有學習時間就不呼叫後端，節省 API 額度
-    if (!spentMinutes || spentMinutes <= 0) return;
-
-    try {
-      // 若您原本有寫好更新時數到 GAS 的邏輯，可以放在這邊
-      /* await gasClient.post({
-        action: 'updateProgress',
-        userId: userProfile.userId || userProfile.UserId,
-        courseId: courseId,
-        minutes: spentMinutes
-      });
-      */
-    } catch (error) {
-      console.error("進度更新失敗", error);
-    }
-  };
   // ==========================================
   // 4. 生命週期與路由
   // ==========================================
@@ -489,7 +484,7 @@ const handleCourseComplete = async (badges) => {
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><ShieldCheck size={20} /></div>
                     <input
                       type="text" value={loginInput} onChange={(e) => setLoginInput(e.target.value)}
-                      placeholder="請輸入工號 (例: EMP001)"
+                      placeholder="請輸入工號 (例: 20880001)"
                       className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium text-slate-700"
                       disabled={isLoggingIn} autoComplete="off"
                     />
@@ -920,7 +915,7 @@ function LibraryView({ courses, progress, onStartCourse }) {
           <div className="flex items-start bg-white/10 p-4 rounded-xl border border-white/20 backdrop-blur-sm max-w-2xl">
             <Info className="w-5 h-5 text-blue-300 mr-3 flex-shrink-0 mt-0.5" />
             <p className="text-blue-50 text-sm leading-relaxed font-medium">
-              我們將課程重新包裝為 6 大親切頻道，結合後台 KSA 戰略建模，讓學習更貼近您的日常需求。
+              我們的課程分為六大主題，結合後台 KSA 戰略建模，讓學習更貼近您的日常需求。
             </p>
           </div>
         </div>
