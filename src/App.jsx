@@ -13,6 +13,45 @@ import {
 
 import { gasClient } from './utils/gasClient';
 
+// ==========================================
+// 全域音訊播放器 (singleton，跨頁面背景播放)
+// ==========================================
+const globalAudio = new Audio();
+
+// ==========================================
+// Toast 系統 (全域，避免 prop drilling)
+// ==========================================
+let _setToast = null;
+function showToast(message, type = 'success') {
+  if (_setToast) _setToast({ message, type, id: Date.now() });
+}
+
+function Toast() {
+  const [toast, setToast] = useState(null);
+  useEffect(() => {
+    _setToast = setToast;
+    return () => { _setToast = null; };
+  }, []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  if (!toast) return null;
+  const colors = {
+    success: 'bg-emerald-500',
+    error: 'bg-red-500',
+    info: 'bg-blue-500',
+    warning: 'bg-amber-500',
+  };
+  return (
+    <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[9999] ${colors[toast.type] || colors.success} text-white px-6 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-2 transition-all`}>
+      {toast.message}
+    </div>
+  );
+}
+
 // --- 六大頻道配置 (前台 / 後台 雙軌命名) ---
 const categoriesConfig = {
   '初心補給站': { backend: '組織文化與思維', icon: Sparkles, color: 'text-amber-500', bg: 'bg-amber-100', border: 'border-amber-200', radarIndex: 0 },
@@ -148,6 +187,26 @@ export default function App() {
     totalLearningMinutes: 0
   });
 
+  // 🎵 背景音訊狀態
+  const [nowPlaying, setNowPlaying] = useState(null); // { src, title, category }
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [audioSpeed, setAudioSpeed] = useState(1.0);
+
+  // 同步全域 Audio 事件到 React state
+  useEffect(() => {
+    const onPlay  = () => setIsAudioPlaying(true);
+    const onPause = () => setIsAudioPlaying(false);
+    const onEnded = () => setIsAudioPlaying(false);
+    globalAudio.addEventListener('play',  onPlay);
+    globalAudio.addEventListener('pause', onPause);
+    globalAudio.addEventListener('ended', onEnded);
+    return () => {
+      globalAudio.removeEventListener('play',  onPlay);
+      globalAudio.removeEventListener('pause', onPause);
+      globalAudio.removeEventListener('ended', onEnded);
+    };
+  }, []);
+
   // ==========================================
   // 2. 核心資料抓取邏輯 (統一由這個函式負責)
   // ==========================================
@@ -257,9 +316,9 @@ const handleCourseComplete = async (badges) => {
 
       // --- 動作 3：根據課程類型給予不同提示 ---
       if (isOJT) {
-        alert("👏 測驗滿分！測驗關卡已通過。\n\n接下來請完成「實戰成果上傳」，待主管核准後，徽章與進度才會正式解鎖喔！");
+        showToast('測驗關卡通過！請完成實戰成果上傳，待主管核准後徽章才會解鎖。', 'warning');
       } else {
-        alert("🎉 恭喜完成課程！完課紀錄與徽章已同步至雲端系統。");
+        showToast('恭喜完成課程！完課紀錄與徽章已同步至雲端。', 'success');
       }
 
       // 重整畫面資料
@@ -270,7 +329,7 @@ const handleCourseComplete = async (badges) => {
     }
   } catch (error) {
     console.error("存檔發生錯誤:", error);
-    alert("存檔失敗，請聯繫管理員。");
+    showToast('存檔失敗，請聯繫管理員。', 'error');
   } finally {
     setIsLoading(false);
   }
@@ -341,10 +400,9 @@ const handleCourseComplete = async (badges) => {
       // 👆👆👆 👆👆👆
 
       if (response.status === 'success') {
-        alert('🎉 密碼修改成功！歡迎正式進入良興雲端學院。');
         const updatedProfile = { ...userProfile, isFirstLogin: false };
         setUserProfile(updatedProfile);
-        localStorage.setItem('cloud_academy_userId', updatedProfile.userId || updatedProfile.UserId);
+        localStorage.setItem('cloud_academy_user', JSON.stringify(updatedProfile));
         setIsFirstLoginMode(false);
         fetchDashboardData(updatedProfile.userId || updatedProfile.UserId);
       } else {
@@ -399,16 +457,6 @@ const handleCourseComplete = async (badges) => {
   // 4. 生命週期與路由
   // ==========================================
 
-  // 🚀 自動登入檢查
-  useEffect(() => {
-    const storedId = localStorage.getItem('cloud_academy_userId');
-    if (storedId) {
-      handleLogin(storedId);
-    } else {
-      setIsLoading(false);
-    }
-  }, []);
-
   // 監聽瀏覽器上一頁/下一頁
   useEffect(() => {
     const handlePopState = () => {
@@ -458,6 +506,8 @@ const handleCourseComplete = async (badges) => {
 
   if (!userProfile || isFirstLoginMode) {
     return (
+      <>
+      <Toast />
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 font-sans">
         <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md flex flex-col items-center border border-slate-100 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-400 opacity-10 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
@@ -564,12 +614,15 @@ const handleCourseComplete = async (badges) => {
           </div>
         </div>
       </div>
+      </>
     );
   }
   // ==========================================
   // 6. 登入後主畫面 (Main Render)
   // ==========================================
   return (
+    <>
+    <Toast />
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
       {/* --- 左側導航列 --- */}
       <nav className="bg-slate-900 text-slate-300 w-full md:w-64 flex-shrink-0 flex md:flex-col justify-between md:justify-start shadow-xl z-20 fixed md:sticky bottom-0 md:top-0 h-16 md:h-screen">
@@ -588,7 +641,7 @@ const handleCourseComplete = async (badges) => {
           <button onClick={() => navigateTo('achievements')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'achievements' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}><Award className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">我的成就</span></button>
           
           {(userProfile?.role === 'manager' || userProfile?.role === 'admin') && (
-            <button onClick={() => navigateTo('manager')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'manager' ? 'bg-amber-600 text-white' : 'text-amber-500 hover:bg-slate-800'}`}><ShieldCheck className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">主管審核中心</span></button>
+            <button onClick={() => navigateTo('manager')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'manager' ? 'bg-amber-600 text-white' : 'text-amber-500 hover:bg-slate-800'}`}><ShieldCheck className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">{userProfile?.role === 'admin' ? '系統管理中心' : '主管審核中心'}</span></button>
           )}
         </div>
 
@@ -603,6 +656,7 @@ const handleCourseComplete = async (badges) => {
                 {userProfile.userId || userProfile.empId}
               </span>
               {userProfile.role === 'manager' && <span className="text-[10px] text-amber-300 font-bold border border-amber-800 bg-amber-900/50 px-1.5 py-0.5 rounded ml-1 tracking-wider">👑 主管</span>}
+              {userProfile.role === 'admin' && <span className="text-[10px] text-blue-300 font-bold border border-blue-800 bg-blue-900/50 px-1.5 py-0.5 rounded ml-1 tracking-wider">⚙️ Admin</span>}
             </div>
           </div>
         </div>
@@ -616,7 +670,7 @@ const handleCourseComplete = async (badges) => {
               {currentView === 'dashboard' && '學習儀表板 (智能引導與個人化路徑)'}
               {currentView === 'library' && '六大頻道資源庫'}
               {currentView === 'achievements' && '六大向度與遊戲化成就'}
-              {currentView === 'manager' && <><ShieldCheck className="w-6 h-6 mr-2 text-amber-500"/> 主管審核中心</>}
+              {currentView === 'manager' && <><ShieldCheck className="w-6 h-6 mr-2 text-amber-500"/> {userProfile?.role === 'admin' ? '系統管理中心' : '主管審核中心'}</>}
               {currentView === 'course' && <><BookOpen className="w-6 h-6 mr-2 text-blue-600"/> 課程學習區 (提取練習與微學習)</>}
             </h1>
             <div className="flex items-center space-x-4">
@@ -633,38 +687,89 @@ const handleCourseComplete = async (badges) => {
           {currentView === 'dashboard' && <DashboardView courses={coursesData} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} onViewAll={() => navigateTo('library')} />}
           {currentView === 'library' && <LibraryView courses={coursesData} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} />}
           {currentView === 'achievements' && <AchievementView progress={progressData} courses={coursesData} />}
-          {currentView === 'manager' && <ManagerDashboard onBack={() => navigateTo('dashboard')} />}
+          {currentView === 'manager' && <ManagerDashboard onBack={() => navigateTo('dashboard')} userProfile={userProfile} courses={coursesData} />}
 
-          {/* ✨ 修正：CoursePlayerView 的所有參數都精準對接了！ */}
           {currentView === 'course' && selectedCourse && (
-            <CoursePlayerView 
-              course={selectedCourse} 
-              onBack={() => navigateTo('library')} 
-              onComplete={handleCourseComplete} // 傳入存檔函式
+            <CoursePlayerView
+              course={selectedCourse}
+              onBack={() => navigateTo('library')}
+              onComplete={handleCourseComplete}
               isCompleted={selectedCourse.isCompleted}
               onUpdateProgress={handleUpdateProgress}
-              onRefresh={() => fetchDashboardData(userProfile.userId || userProfile.empId)} // 傳入刷新函式
+              onRefresh={() => fetchDashboardData(userProfile.userId || userProfile.empId)}
+              nowPlaying={nowPlaying}
+              setNowPlaying={setNowPlaying}
+              isAudioPlaying={isAudioPlaying}
+              audioSpeed={audioSpeed}
+              setAudioSpeed={setAudioSpeed}
             />
           )}
         </div>
       </main>
+
+      {/* 🎵 背景播放 Mini Player */}
+      {nowPlaying && currentView !== 'course' && (
+        <MiniPlayer
+          nowPlaying={nowPlaying}
+          isPlaying={isAudioPlaying}
+          speed={audioSpeed}
+          onSpeedChange={(s) => {
+            setAudioSpeed(s);
+            globalAudio.playbackRate = s;
+          }}
+          onTogglePlay={() => isAudioPlaying ? globalAudio.pause() : globalAudio.play()}
+          onStop={() => { globalAudio.pause(); globalAudio.src = ''; setNowPlaying(null); setIsAudioPlaying(false); }}
+          onGoToCourse={() => {
+            const course = coursesData.find(c => c.title === nowPlaying.title);
+            if (course) navigateTo('course', course);
+          }}
+        />
+      )}
     </div>
+    </>
   );
 }
 
-function NavItem({ icon, label, active, onClick }) {
+function MiniPlayer({ nowPlaying, isPlaying, speed, onSpeedChange, onTogglePlay, onStop, onGoToCourse }) {
+  const config = categoriesConfig[nowPlaying.category] || categoriesConfig['初心補給站'];
+  const Icon = config.icon;
+
   return (
-    <button 
-      onClick={onClick}
-      className={`flex flex-col md:flex-row items-center justify-center md:justify-start p-2 md:p-3 rounded-xl transition-all ${
-        active 
-          ? 'text-blue-400 md:bg-slate-800 shadow-inner font-bold border-l-0 md:border-l-4 border-blue-500' 
-          : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-      }`}
-    >
-      <div className={`w-6 h-6 mb-1 md:mb-0 md:mr-3 ${active ? 'scale-110' : ''} transition-transform`}>{icon}</div>
-      <span className="text-[10px] md:text-sm">{label}</span>
-    </button>
+    <div className={`fixed bottom-16 md:bottom-0 left-0 right-0 md:left-64 z-30 ${config.bg} border-t-2 ${config.border} shadow-2xl`}>
+      <div className="max-w-7xl mx-auto px-4 py-2 flex items-center gap-3">
+        {/* 頻道圖示 */}
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${config.color}`}>
+          <Icon className="w-4 h-4" />
+        </div>
+
+        {/* 課程名稱 (點擊跳回課程) */}
+        <button onClick={onGoToCourse} className="flex-1 text-left min-w-0">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">背景播放中</p>
+          <p className="text-sm font-black text-slate-800 truncate">{nowPlaying.title}</p>
+        </button>
+
+        {/* 速度 */}
+        <div className="hidden sm:flex items-center gap-1">
+          {[0.75, 1.0, 1.25, 1.5, 2.0].map(s => (
+            <button key={s} onClick={() => onSpeedChange(s)}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${speed === s ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-200'}`}>
+              {s}x
+            </button>
+          ))}
+        </div>
+
+        {/* 播放/暫停 */}
+        <button onClick={onTogglePlay}
+          className="w-9 h-9 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 transition-colors flex-shrink-0">
+          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+        </button>
+
+        {/* 停止 */}
+        <button onClick={onStop} className="text-slate-400 hover:text-red-500 transition-colors flex-shrink-0 p-1">
+          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -785,106 +890,6 @@ function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
               onClick={() => onStartCourse(course)} 
             />
           ))}
-        </div>
-      </div>
-    </div>
-  );
-
-
-  return (
-    <div className="space-y-8 animate-fade-in-up">
-      {/* 🏆 頂部歡迎與雷達圖區塊 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 rounded-2xl p-6 md:p-10 text-white shadow-xl relative overflow-hidden flex flex-col justify-center">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-10 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
-          <div className="absolute bottom-0 left-0 w-40 h-40 bg-blue-400 opacity-20 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none"></div>
-          
-          <div className="relative z-10">
-            <div className="flex items-center space-x-2 mb-4">
-              <span className="inline-block px-3 py-1 bg-white/20 rounded-full text-xs font-bold tracking-wider border border-white/30">
-                職位專屬地圖：新進人員
-              </span>
-              <span className="inline-block px-3 py-1 bg-emerald-500/80 rounded-full text-xs font-bold tracking-wider border border-emerald-400/50 flex items-center">
-                <Target className="w-3 h-3 mr-1"/> 生存首 30 天任務
-              </span>
-            </div>
-            <h2 className="text-3xl md:text-4xl font-extrabold mb-4 leading-tight">準備好升級了嗎？<br/>解鎖你的職場超能力！</h2>
-            <p className="text-blue-100 mb-8 text-lg font-medium leading-relaxed max-w-xl">
-              系統已為您派發專屬必修包。完成必修後，將開啟「T型人才選修池」與「實戰解鎖」功能。
-            </p>
-            <div className="flex items-center space-x-4">
-              <button 
-                onClick={() => {
-                  const nextCourse = mandatoryCourses.find(c => !completedIds.includes(String(c.id || c.CourseId).trim()));
-                  onStartCourse(nextCourse || mandatoryCourses[0]);
-                }}
-                className="bg-white text-blue-800 font-bold px-8 py-3.5 rounded-xl shadow-lg hover:shadow-xl hover:bg-slate-50 hover:scale-105 transition-all flex items-center"
-              >
-                <Play className="w-5 h-5 mr-2" /> {mandatoryCompleted === 0 ? '啟動新手任務' : '接續必修進度'}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* 🎯 六大向度雷達圖 */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col items-center justify-center relative min-h-[300px]">
-          <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center absolute top-6 left-6">
-            <Map className="w-4 h-4 mr-2 text-indigo-500"/> 六大向度雷達
-          </h3>
-          <div className="mt-4 w-full h-full">
-              {/* 這裡確保 RadarChart 接收的是我們計算後的 radarData */}
-              <RadarChart data={radarData} />
-          </div>
-          <p className="text-xs text-slate-400 mt-2 text-center">收集各頻道徽章，點亮你的職能雷達</p>
-        </div>
-      </div>
-
-      {/* 📍 智能引導路徑 - 必修任務包 */}
-      <div>
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="text-xl font-bold text-slate-800 flex items-center">
-            <Target className="w-5 h-5 mr-2 text-emerald-500"/> 必修任務包 
-            {/* 這裡修正了動態數字顯示 */}
-            <span className="text-sm font-normal text-slate-500 ml-3">({mandatoryCompleted}/{mandatoryCourses.length} 完成)</span>
-          </h3>
-          <button onClick={onViewAll} className="text-blue-600 font-bold hover:underline text-sm flex items-center">
-            前往資源庫 <ChevronLeft className="w-4 h-4 ml-1 rotate-180" />
-          </button>
-        </div>
-        
-        {/* 動態進度條 */}
-        <div className="w-full bg-slate-100 rounded-full h-2.5 mb-6 overflow-hidden">
-          <div 
-            className="bg-emerald-500 h-2.5 rounded-full transition-all duration-1000 ease-out" 
-            style={{ width: `${mandatoryRate}%` }}
-          ></div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {mandatoryCourses.map(course => {
-            const isDone = completedIds.includes(String(course.id || course.CourseId).trim());
-            return (
-              <CourseCard key={course.id} course={course} isCompleted={isDone} onClick={() => onStartCourse(course)} />
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ✨ T型選修池 */}
-      <div className="pt-8 border-t border-slate-200">
-        <div className="flex items-center mb-6">
-          <h3 className="text-xl font-bold text-slate-800 flex items-center">
-            <Sparkles className="w-5 h-5 mr-2 text-amber-500"/> T 型選修池
-          </h3>
-          <span className="ml-3 text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-md border border-slate-200 font-medium">自主權賦能區</span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {electiveCourses.map(course => {
-            const isDone = completedIds.includes(String(course.id || course.CourseId).trim());
-            return (
-              <CourseCard key={course.id} course={course} isCompleted={isDone} onClick={() => onStartCourse(course)} />
-            );
-          })}
         </div>
       </div>
     </div>
@@ -1190,116 +1195,293 @@ function AchievementView({ progress, courses }) {
   );
 }
 
-  // ==========================================
-// 👑 主管審核中心元件
 // ==========================================
-function ManagerDashboard({ onBack }) {
-  const [tasks, setTasks] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+// 👑 主管管理中心（三 Tab 版）
+// ==========================================
+function ManagerDashboard({ onBack, userProfile, courses }) {
+  const [activeTab, setActiveTab] = useState('ojt');
+  const [tasks, setTasks]               = useState([]);
+  const [deptReport, setDeptReport]     = useState(null);
+  const [deptMandatory, setDeptMandatory] = useState(new Set());
+  const [departments, setDepartments]   = useState([]);
+  const [selectedDept, setSelectedDept] = useState(userProfile?.department || '');
+  const [isLoading, setIsLoading]       = useState(false);
 
-  // 一進來就去後端抓「待審核清單」
+  const isAdmin   = userProfile?.role === 'admin';
+  const userId    = userProfile?.userId || userProfile?.empId;
+
+  // 切 tab 時重新拉資料
   useEffect(() => {
-    fetchPendingTasks();
+    if (activeTab === 'ojt')      fetchPendingTasks();
+    if (activeTab === 'report')   fetchDeptReport();
+    if (activeTab === 'settings') fetchDeptMandatory();
+  }, [activeTab, selectedDept]);
+
+  // admin 進入時先拉部門清單
+  useEffect(() => {
+    if (isAdmin) {
+      gasClient.post('getDepartments', { requestUserId: userId })
+        .then(res => { if (res.status === 'success') setDepartments(res.departments || []); });
+    }
   }, []);
 
-  const fetchPendingTasks = async () => {
+  async function fetchPendingTasks() {
     setIsLoading(true);
     try {
       const res = await gasClient.post('getPendingOJTTasks', {});
-      
-      // 🔥 裝上透視眼：把後端傳來的所有東西，原封不動印在 Console 裡！
-      console.log('🔥🔥🔥 來自後端的原始回應：', res);
-
-      // 超強容錯處理：不管後端是用哪種格式包裝，我們都把它挖出來
-      if (res.success === true || res.status === 'success') {
-        // 有可能資料直接放在 res.tasks，也有可能被包在 res.data 裡面
-        const fetchedTasks = res.tasks || (res.data && res.data.tasks) || res.data || [];
-        
-        console.log('🔥🔥🔥 成功挖出的任務陣列：', fetchedTasks);
-        setTasks(fetchedTasks);
-      } else {
-        console.warn('⚠️ 後端說不成功，或者格式不對。');
+      if (res.success || res.status === 'success') {
+        setTasks(res.tasks || res.data?.tasks || []);
       }
-    } catch (error) {
-      console.error('❌ 獲取待審核清單失敗:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    } finally { setIsLoading(false); }
+  }
 
-  // 處理核准或退回
-  const handleReview = async (rowNumber, newStatus) => {
-    const isApproved = newStatus === 'approved';
-    const confirmMsg = isApproved ? '確定要「核准」這份作業嗎？' : '確定要「退回」這份作業嗎？';
-    
-    if (!window.confirm(confirmMsg)) return;
-
+  async function fetchDeptReport() {
+    if (!selectedDept) return;
+    setIsLoading(true);
     try {
-      const res = await gasClient.post('reviewOJTTask', { rowNumber, newStatus });
-      if (res.success) {
-        alert(isApproved ? '✅ 作業已核准！' : '❌ 作業已退回！');
-        fetchPendingTasks(); // 重新抓取最新列表，剛剛那筆就會消失了！
-      }
-    } catch (error) {
-      console.error('審核失敗:', error);
-      alert('審核發生錯誤，請稍後再試。');
+      const res = await gasClient.post('getDeptReport', { deptId: selectedDept, requestUserId: userId });
+      if (res.status === 'success') setDeptReport(res.data);
+    } finally { setIsLoading(false); }
+  }
+
+  async function fetchDeptMandatory() {
+    if (!selectedDept) return;
+    setIsLoading(true);
+    try {
+      const res = await gasClient.post('getDeptMandatory', { deptId: selectedDept });
+      if (res.status === 'success') setDeptMandatory(new Set(res.courseIds || []));
+    } finally { setIsLoading(false); }
+  }
+
+  async function handleReview(rowNumber, newStatus) {
+    if (!window.confirm(newStatus === 'approved' ? '確定核准？' : '確定退回？')) return;
+    const res = await gasClient.post('reviewOJTTask', { rowNumber, newStatus });
+    if (res.success) {
+      showToast(newStatus === 'approved' ? '已核准！' : '已退回！', newStatus === 'approved' ? 'success' : 'info');
+      fetchPendingTasks();
     }
-  };
+  }
+
+  async function handleToggleMandatory(courseId, currentlyOn) {
+    await gasClient.post('setDeptMandatory', { deptId: selectedDept, courseId, isAdd: !currentlyOn });
+    setDeptMandatory(prev => {
+      const next = new Set(prev);
+      currentlyOn ? next.delete(courseId) : next.add(courseId);
+      return next;
+    });
+  }
+
+  const tabs = [
+    { key: 'ojt',      label: 'OJT 作業審核' },
+    { key: 'report',   label: '部門學習狀況' },
+    { key: 'settings', label: '必修課設定' },
+  ];
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">
-      <div className="flex items-center justify-between mb-8 pb-4 border-b border-slate-100">
-        <h2 className="text-2xl font-bold flex items-center text-slate-800">
-          <ShieldCheck className="w-8 h-8 mr-3 text-blue-600" /> 
-          主管審核中心
+    <div className="max-w-5xl mx-auto p-4 mt-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+          <ShieldCheck className="w-7 h-7 text-blue-600" /> 管理中心
         </h2>
-        <button onClick={onBack} className="px-4 py-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors">
-          ← 返回學習大廳
+        <button onClick={onBack} className="px-4 py-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-medium">
+          ← 返回
         </button>
       </div>
 
-      {isLoading ? (
-        <div className="flex flex-col items-center justify-center py-12 text-slate-500">
-          <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-          <p>正在努力撈取待審核清單...</p>
+      {/* admin 部門選擇 */}
+      {isAdmin && (
+        <div className="mb-4 flex items-center gap-3">
+          <span className="text-sm text-slate-500 font-medium">查看部門：</span>
+          <select value={selectedDept} onChange={e => setSelectedDept(e.target.value)}
+            className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300">
+            <option value="">請選擇</option>
+            {departments.map(d => (
+              <option key={d.deptId} value={d.deptId}>{d.deptId}（{d.employeeCount} 人）</option>
+            ))}
+          </select>
         </div>
-      ) : tasks.length === 0 ? (
-        <div className="text-center py-16 bg-slate-50 rounded-xl border border-dashed border-slate-300">
-          <div className="text-4xl mb-4">🎉</div>
-          <h3 className="text-xl font-bold text-slate-700 mb-2">太棒了！目前沒有待審核的作業</h3>
-          <p className="text-slate-500">主管您可以先去喝杯咖啡休息一下</p>
+      )}
+
+      {/* Tabs */}
+      <div className="flex gap-1 mb-6 bg-slate-100 p-1 rounded-xl w-fit">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setActiveTab(t.key)}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              activeTab === t.key ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Loading */}
+      {isLoading && (
+        <div className="flex justify-center py-16">
+          <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
         </div>
-      ) : (
-        <div className="space-y-4">
-          {tasks.map(task => (
-            <div key={task.TaskId} className="p-5 border border-slate-200 rounded-xl hover:border-blue-300 transition-colors bg-white flex flex-col md:flex-row justify-between md:items-center gap-4">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-md">待審核</span>
-                  <span className="text-sm font-mono text-slate-400">{task.TaskId}</span>
+      )}
+
+      {/* ── Tab 1: OJT 審核 ── */}
+      {!isLoading && activeTab === 'ojt' && (
+        tasks.length === 0 ? (
+          <div className="text-center py-16 bg-slate-50 rounded-2xl border border-dashed border-slate-300">
+            <div className="text-4xl mb-3">🎉</div>
+            <p className="font-bold text-slate-700">目前沒有待審核作業</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {tasks.map(task => (
+              <div key={task.taskId || task.TaskId}
+                className="p-5 bg-white border border-slate-200 rounded-xl flex flex-col md:flex-row justify-between md:items-center gap-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-bold rounded">待審核</span>
+                    <span className="text-xs font-mono text-slate-400">{task.taskId || task.TaskId}</span>
+                  </div>
+                  <p className="font-semibold text-slate-800">
+                    {task.userName || task.UserId} <span className="text-slate-400 font-normal text-sm">（{task.userId || task.UserId}）</span>
+                  </p>
+                  <p className="text-sm text-slate-500 mt-0.5">{task.courseTitle || task.CourseId}</p>
+                  <a href={task.ojtFileUrl || task.OjtFileUrl} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg text-sm mt-2 transition-colors">
+                    <ExternalLink className="w-4 h-4 mr-1.5" /> 預覽作業
+                  </a>
                 </div>
-                <p className="font-bold text-slate-800 mb-1">員工工號：<span className="text-blue-600">{task.UserId}</span></p>
-                <p className="text-sm text-slate-600 mb-3">關聯課程：{task.CourseId}</p>
-                
-                <a href={task.OjtFileUrl} target="_blank" rel="noreferrer" 
-                   className="inline-flex items-center text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">
-                  <ExternalLink className="w-4 h-4 mr-1.5" /> 點擊預覽作業檔案
-                </a>
+                <div className="flex md:flex-col gap-2 min-w-[110px]">
+                  <button onClick={() => handleReview(task.rowNumber, 'approved')}
+                    className="flex-1 py-2 bg-emerald-500 text-white text-sm font-bold rounded-lg hover:bg-emerald-600">✅ 核准</button>
+                  <button onClick={() => handleReview(task.rowNumber, 'rejected')}
+                    className="flex-1 py-2 border-2 border-slate-200 text-slate-600 text-sm font-bold rounded-lg hover:bg-red-50 hover:text-red-600 hover:border-red-200">❌ 退回</button>
+                </div>
               </div>
-              
-              <div className="flex md:flex-col gap-2 min-w-[120px]">
-                <button onClick={() => handleReview(task.rowNumber, 'approved')} 
-                        className="flex-1 px-4 py-2.5 bg-emerald-500 text-white font-bold rounded-lg hover:bg-emerald-600 transition-colors flex items-center justify-center">
-                  ✅ 核准
-                </button>
-                <button onClick={() => handleReview(task.rowNumber, 'rejected')} 
-                        className="flex-1 px-4 py-2 bg-white border-2 border-slate-200 text-slate-600 font-bold rounded-lg hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors flex items-center justify-center">
-                  ❌ 退回
-                </button>
+            ))}
+          </div>
+        )
+      )}
+
+      {/* ── Tab 2: 部門學習狀況 ── */}
+      {!isLoading && activeTab === 'report' && (
+        !selectedDept ? (
+          <p className="text-slate-400 text-center py-12">請先選擇部門</p>
+        ) : !deptReport ? (
+          <p className="text-slate-400 text-center py-12">無資料</p>
+        ) : (
+          <div className="space-y-6">
+            {/* 摘要卡片 */}
+            <div className="grid grid-cols-3 gap-4">
+              {[
+                { label: '部門人數', value: deptReport.totalUsers, unit: '人' },
+                { label: '必修課數', value: deptReport.mandatoryCourseCount, unit: '門' },
+                { label: '必修完成率', value: deptReport.overallMandatoryRate, unit: '%',
+                  color: deptReport.overallMandatoryRate >= 80 ? 'text-emerald-600' : deptReport.overallMandatoryRate >= 50 ? 'text-amber-600' : 'text-red-600' },
+              ].map(card => (
+                <div key={card.label} className="bg-white border border-slate-200 rounded-2xl p-4 text-center">
+                  <p className="text-xs text-slate-400 mb-1">{card.label}</p>
+                  <p className={`text-3xl font-extrabold ${card.color || 'text-slate-800'}`}>{card.value}<span className="text-base font-normal text-slate-400 ml-1">{card.unit}</span></p>
+                </div>
+              ))}
+            </div>
+
+            {/* 必修課完成率 */}
+            {deptReport.courseStats.length > 0 && (
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                <h3 className="font-bold text-slate-700 mb-4">必修課程完成情況</h3>
+                <div className="space-y-3">
+                  {deptReport.courseStats.map(c => (
+                    <div key={c.courseId}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-slate-700 font-medium truncate mr-2">{c.title}</span>
+                        <span className="text-slate-500 whitespace-nowrap">{c.completedCount}/{c.totalUsers} 人（{c.completionRate}%）</span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${c.completionRate >= 80 ? 'bg-emerald-400' : c.completionRate >= 50 ? 'bg-amber-400' : 'bg-red-400'}`}
+                          style={{ width: `${c.completionRate}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 員工明細 */}
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100">
+                <h3 className="font-bold text-slate-700">員工學習明細</h3>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {deptReport.employees.map(emp => (
+                  <div key={emp.userId} className="px-5 py-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="font-semibold text-slate-800">{emp.name} <span className="text-xs text-slate-400 font-normal">{emp.userId}</span></p>
+                        <p className="text-sm text-slate-500 mt-0.5">
+                          已完成 {emp.completedCount}/{emp.totalCourses} 門｜必修 {emp.mandatoryCompleted}/{emp.mandatoryTotal} 門
+                        </p>
+                      </div>
+                      {emp.mandatoryIncomplete.length === 0 ? (
+                        <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg whitespace-nowrap">✓ 必修完成</span>
+                      ) : (
+                        <span className="px-2.5 py-1 bg-red-50 text-red-700 text-xs font-bold rounded-lg whitespace-nowrap">⚠ 缺 {emp.mandatoryIncomplete.length} 門</span>
+                      )}
+                    </div>
+                    {emp.mandatoryIncomplete.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {emp.mandatoryIncomplete.map(c => (
+                          <span key={c.courseId} className="px-2 py-0.5 bg-red-50 text-red-600 text-xs rounded border border-red-100">{c.title}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
-          ))}
-        </div>
+          </div>
+        )
+      )}
+
+      {/* ── Tab 3: 必修課設定 ── */}
+      {!isLoading && activeTab === 'settings' && (
+        !selectedDept ? (
+          <p className="text-slate-400 text-center py-12">請先選擇部門</p>
+        ) : (
+          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-700">設定「{selectedDept}」部門必修課</h3>
+              <p className="text-xs text-slate-400 mt-1">全域必修課已固定，這裡只能設定部門加選的必修課程</p>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {(courses || []).filter(c => !(c.isMandatory && !deptMandatory.has(c.id))).length === 0 && (
+                <p className="text-slate-400 text-center py-8 text-sm">無課程可設定</p>
+              )}
+              {(courses || []).map(c => {
+                const isGlobalMandatory = c.isMandatory && !deptMandatory.has(c.id || c.CourseId);
+                const isDeptMandatory   = deptMandatory.has(c.id || c.CourseId);
+                const courseId = c.id || c.CourseId;
+                return (
+                  <div key={courseId} className="px-5 py-3.5 flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-medium text-slate-700 text-sm">{c.title}</p>
+                      <p className="text-xs text-slate-400">{c.category}</p>
+                    </div>
+                    {isGlobalMandatory ? (
+                      <span className="px-2.5 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-lg whitespace-nowrap">全域必修</span>
+                    ) : (
+                      <button onClick={() => handleToggleMandatory(courseId, isDeptMandatory)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
+                          isDeptMandatory ? 'bg-blue-600' : 'bg-slate-200'
+                        }`}>
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                          isDeptMandatory ? 'translate-x-6' : 'translate-x-1'
+                        }`} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )
       )}
     </div>
   );
@@ -1308,11 +1490,15 @@ function ManagerDashboard({ onBack }) {
 // ⚠️ 請確保檔案最上方有這行 (新增了 Mic)
 // import { ChevronLeft, BookOpen, FileText, CheckCircle, Info, Award, Sparkles, Mic, Cloud, Target, Clock } from 'lucide-react';
 
-function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdateProgress, onRefresh }) {
+const SPEED_OPTIONS = [0.75, 1.0, 1.25, 1.5, 2.0];
+
+function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdateProgress, onRefresh,
+  nowPlaying, setNowPlaying, isAudioPlaying, audioSpeed, setAudioSpeed }) {
   // 1. 狀態管理
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState('quiz');
-  const [quizPassed, setQuizPassed] = useState(isCompleted);
+  // audioSpeed/setAudioSpeed 來自 App，統一由 globalAudio 管理
+  const playbackSpeed = audioSpeed ?? 1.0;
 
   // 2. 自動置頂
   useEffect(() => {
@@ -1331,65 +1517,146 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       console.log(`⏱️ 下課！本次累積時數：${spentMinutes}`);
 
       if (spentMinutes > 0 && onUpdateProgress) {
-        onUpdateProgress(spentMinutes);
+        onUpdateProgress(course.id, spentMinutes);
       }
     };
   }, [course.id, onUpdateProgress, course.title]);
 
   // 4. 🪄 網址轉換引擎
+  const isDriveUrl = (url) =>
+    typeof url === 'string' && url.includes('drive.google.com');
+
   const convertDriveLink = (url, type) => {
     if (!url || typeof url !== 'string') return null;
-    
-    // 提取 File ID
-    const match = url.match(/\/d\/(.+?)\/|id=(.+?)(&|$)/);
+
+    const match = url.match(/\/d\/([^/?]+)|[?&]id=([^&]+)/);
     const fileId = match ? (match[1] || match[2]) : null;
-    
-    if (fileId) {
-      // 🚀 關鍵修復：不再使用 uc?export=download (這會導致直接下載)
-      // 統一使用 /preview 網址，這會強制開啟 Google Drive 的內嵌播放器
-      return `https://drive.google.com/file/d/${fileId}/preview`;
-    }
+
+    // Google Drive URL → 一律使用 /preview（iframe 模式，CORS 穩定）
+    if (fileId) return `https://drive.google.com/file/d/${fileId}/preview`;
+
+    // 非 Drive URL（直接 CDN）→ 原樣回傳，讓 <audio> 自行處理
     return url;
   };
 
   // 5. 🤖 處理召喚 AI
   const handleGenerateAI = async () => {
+    const courseId = course.id || course.CourseId;
+    if (!courseId) {
+      showToast('找不到課程 ID，請重新整理後再試。', 'error');
+      return;
+    }
     setIsGenerating(true);
     try {
-      const res = await gasClient.post('generateAiContent', { courseId: course.id });
-      if (res.success) {
-        alert("✨ AI 助教已完成重點摘要與測驗題目！");
-        if (onRefresh) onRefresh(); // 觸發老爸重新抓資料
+      const res = await gasClient.post('generateAiContent', { courseId });
+      if (res.success || res.status === 'success') {
+        showToast('AI 助教已完成重點摘要與測驗題目！', 'success');
+        if (onRefresh) onRefresh();
+      } else {
+        showToast(res.message || 'AI 助教產出失敗，請稍後再試。', 'error');
       }
     } catch (e) {
-      alert("AI 助教塞車了，請稍後再試。");
+      showToast('AI 助教連線失敗，請稍後再試。', 'error');
     } finally {
       setIsGenerating(false);
     }
   };
 
   // 6. 資料防彈處理
+  const materialType = course.materialType || 'video';
   const safeCourse = {
     ...course,
     title: course.title || "未命名課程",
     category: course.category || "初心補給站",
-    materialType: course.materialType || 'video',
-    materialUrl: convertDriveLink(course.materialUrl, course.materialType) || "",
+    materialType,
+    materialUrl: convertDriveLink(course.materialUrl, materialType) || "",
     keyPoints: Array.isArray(course.keyPoints) ? course.keyPoints : [],
     badges: Array.isArray(course.badges) ? course.badges : [],
     transcript: course.transcript || "暫無逐字稿"
   };
 
-// 7. 渲染播放器 (穩定原版：使用 iframe 確保不當機)
+  // 速度變更時同步到 globalAudio
+  const handleSpeedChange = (speed) => {
+    setAudioSpeed(speed);
+    globalAudio.playbackRate = speed;
+  };
+
+  // 原始 URL（未轉換）是否為 Google Drive
+  const sourceIsDrive = isDriveUrl(course.materialUrl);
+
+  // 載入音訊到 globalAudio 並開始播放（只有非 Drive 直連才使用）
+  const handlePlayAudio = () => {
+    if (globalAudio.src !== safeCourse.materialUrl) {
+      globalAudio.src = safeCourse.materialUrl;
+      globalAudio.load();
+    }
+    globalAudio.playbackRate = playbackSpeed;
+    globalAudio.play();
+    setNowPlaying({ src: safeCourse.materialUrl, title: safeCourse.title, category: safeCourse.category });
+  };
+
+  const isThisCourseNowPlaying = nowPlaying?.src === safeCourse.materialUrl;
+
+  // 7. 渲染播放器
   const renderPlayer = () => {
+    // Google Drive 音訊 → iframe（穩定，無 CORS 問題，不支援速度控制）
+    if (safeCourse.materialType === 'audio' && sourceIsDrive) {
+      return (
+        <iframe
+          src={safeCourse.materialUrl}
+          className="w-full h-full border-none"
+          allow="autoplay"
+        />
+      );
+    }
+
+    // 直連 CDN 音訊 → 原生 <audio>，支援速度控制與背景播放
+    if (safeCourse.materialType === 'audio' && !sourceIsDrive) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 p-6 gap-5">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => {
+                if (!isThisCourseNowPlaying) { handlePlayAudio(); return; }
+                isAudioPlaying ? globalAudio.pause() : globalAudio.play();
+              }}
+              className="w-14 h-14 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center shadow-lg hover:bg-amber-300 transition-all"
+            >
+              {isThisCourseNowPlaying && isAudioPlaying
+                ? <Pause className="w-6 h-6" />
+                : <Play className="w-6 h-6 ml-0.5" />}
+            </button>
+            <div className="text-white">
+              <p className="font-black text-base">{safeCourse.title}</p>
+              <p className="text-slate-400 text-xs mt-0.5">
+                {isThisCourseNowPlaying && isAudioPlaying ? '播放中 — 可切換頁面背景聆聽' : '點擊播放'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 text-xs font-bold mr-1">播放速度</span>
+            {SPEED_OPTIONS.map(s => (
+              <button key={s} onClick={() => handleSpeedChange(s)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  playbackSpeed === s ? 'bg-amber-400 text-slate-900 shadow-md scale-105' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}>
+                {s}x
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // 影片 / 其他 → iframe
     return (
       <div className="w-full h-full bg-black relative">
         <iframe
-          src={safeCourse?.materialUrl || ''}
+          src={safeCourse.materialUrl}
           className="absolute top-0 left-0 w-full h-full border-none"
           allow="autoplay; fullscreen"
-          loading="lazy" 
-        ></iframe>
+          loading="lazy"
+        />
       </div>
     );
   };
@@ -1415,9 +1682,11 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
         <h1 className="text-3xl font-black text-slate-900 tracking-tight">{safeCourse.title}</h1>
       </div>
 
-      {/* 影片播放區域 */}
+      {/* 播放區域：audio 縮小高度，video 維持 16:9 */}
       <div className="mb-10 relative">
-        <div className="relative w-full aspect-video bg-slate-900 rounded-3xl shadow-2xl overflow-hidden border-4 border-white flex items-center justify-center">
+        <div className={`relative w-full bg-slate-900 rounded-2xl shadow-xl overflow-hidden border-2 border-slate-200 flex items-center justify-center ${
+          safeCourse.materialType === 'audio' ? 'h-36 md:h-28' : 'aspect-video rounded-3xl border-4 border-white shadow-2xl'
+        }`}>
           {renderPlayer()}
         </div>
       </div>
@@ -1564,25 +1833,6 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
   );
 }
 
-function TabButton({ active, onClick, icon, label }) {
-  return (
-    <button onClick={onClick} className={`flex items-center px-6 py-4 font-extrabold text-sm transition-all border-b-2 whitespace-nowrap ${
-      active ? 'border-blue-600 text-blue-700 bg-white' : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100'
-    }`}>
-      {icon} {label}
-    </button>
-  );
-}
-
-function InfoRow({ label, value }) {
-  return (
-    <div className="flex justify-between items-center text-sm">
-      <span className="text-slate-500 font-medium">{label}</span>
-      <span className="font-bold text-slate-800 text-right">{value}</span>
-    </div>
-  );
-}
-
 function AdvancedCloudAudioPlayer({ course }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -1711,7 +1961,7 @@ function QuizSection({ course, onSubmit, isAlreadyPassed, badges }) {
   const handleSubmitQuiz = () => {
   if (!hasQuiz) return;
   if (Object.keys(answers).length < quizData.length) {
-    alert('企業內訓規定：請回答所有問題後再送出哦！');
+    showToast('請回答所有問題後再送出！', 'warning');
     return;
   }
 
@@ -1730,7 +1980,7 @@ function QuizSection({ course, onSubmit, isAlreadyPassed, badges }) {
       // 🚩 情境 A：OJT 課程。滿分了，但我們「絕對不執行」onSubmit(finalScore)
       // 因為執行了 onSubmit 就會把完課狀態寫進 Sheets，導致徽章直接亮起
       console.log("OJT 測驗達標，等待檔案上傳...");
-      alert('👏 測驗滿分！測驗關卡已通過。接下來請完成下方的「實戰檔案上傳」，待管理員審核後才算正式完課。');
+      showToast('測驗滿分！請完成下方實戰檔案上傳，待管理員審核後才算正式完課。', 'warning');
     } else {
       // 🚩 情境 B：一般課程。滿分即完課。
       onSubmit(finalScore);
@@ -1818,25 +2068,26 @@ function OJTSection({ course }) {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       
-      if (file.size > 5 * 1024 * 1024) { 
-        alert('檔案請勿超過 5MB 喔！'); 
-        return; 
+      if (file.size > 5 * 1024 * 1024) {
+        showToast('檔案請勿超過 5MB！', 'error');
+        return;
       }
 
-      const currentUserId = localStorage.getItem('cloud_academy_userId');
-      if (!currentUserId) { 
-        alert('系統找不到您的登入資訊，請重新整理網頁。'); 
-        return; 
+      const storedUser = localStorage.getItem('cloud_academy_user');
+      const currentUserId = storedUser ? (JSON.parse(storedUser).userId || JSON.parse(storedUser).UserId) : null;
+      if (!currentUserId) {
+        showToast('系統找不到您的登入資訊，請重新整理網頁。', 'error');
+        return;
       }
 
       setOjtStatus('uploading');
       const reader = new FileReader();
-      
+
       reader.onload = async () => {
         try {
           const base64String = reader.result.split(',')[1];
           const response = await gasClient.post('submitOJT', {
-            userId: currentUserId, 
+            userId: currentUserId,
             courseId: course.id || course.CourseId,
             fileName: file.name, 
             mimeType: file.type, 
@@ -1844,14 +2095,14 @@ function OJTSection({ course }) {
             submitType: 'file' // 標註為檔案提交
           });
 
-          if (response.status === 'success') { 
-            setOjtStatus('pending'); 
-            alert('檔案上傳成功！');
-          } else { 
-            throw new Error(response.message); 
+          if (response.status === 'success') {
+            setOjtStatus('pending');
+            showToast('檔案上傳成功！等待主管審核中。', 'success');
+          } else {
+            throw new Error(response.message);
           }
         } catch (error) {
-          alert("上傳失敗：" + error.message);
+          showToast('上傳失敗：' + error.message, 'error');
           setOjtStatus('idle');
         }
       };
@@ -1862,11 +2113,12 @@ function OJTSection({ course }) {
   // --- 核心功能 B：處理連結提交 ---
   const handleLinkSubmit = async () => {
     if (!ojtLink || !ojtLink.startsWith('http')) {
-      alert('請輸入正確的網址連結喔！');
+      showToast('請輸入正確的網址連結！', 'warning');
       return;
     }
 
-    const currentUserId = localStorage.getItem('cloud_academy_userId');
+    const storedUser2 = localStorage.getItem('cloud_academy_user');
+    const currentUserId = storedUser2 ? (JSON.parse(storedUser2).userId || JSON.parse(storedUser2).UserId) : null;
     setOjtStatus('uploading');
 
     try {
@@ -1879,12 +2131,12 @@ function OJTSection({ course }) {
 
       if (response.status === 'success') {
         setOjtStatus('pending');
-        alert('連結提交成功！');
+        showToast('連結提交成功！等待主管審核中。', 'success');
       } else {
         throw new Error(response.message);
       }
     } catch (error) {
-      alert("提交失敗：" + error.message);
+      showToast('提交失敗：' + error.message, 'error');
       setOjtStatus('idle');
     }
   };
@@ -1895,7 +2147,7 @@ function OJTSection({ course }) {
     return (
       <div className="text-center py-10 text-emerald-600 font-bold bg-emerald-50 rounded-2xl border-2 border-emerald-100 animate-fade-in">
         <div className="w-12 h-12 bg-emerald-500 text-white rounded-full flex items-center justify-center mx-auto mb-4">
-          <Check className="w-8 h-8" />
+          <CheckCircle className="w-8 h-8" />
         </div>
         <h3 className="text-xl font-black">主管已核准您的實戰任務！</h3>
         <p className="text-emerald-500/70 text-sm mt-1">恭喜完課，職能已點亮。</p>
