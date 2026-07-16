@@ -703,6 +703,7 @@ const handleCourseComplete = async (badges) => {
               isCompleted={selectedCourse.isCompleted}
               onUpdateProgress={handleUpdateProgress}
               onRefresh={() => fetchDashboardData(userProfile.userId || userProfile.empId)}
+              userId={userProfile?.userId || userProfile?.UserId}
               nowPlaying={nowPlaying}
               setNowPlaying={setNowPlaying}
               isAudioPlaying={isAudioPlaying}
@@ -1500,7 +1501,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
 
 const SPEED_OPTIONS = [0.75, 1.0, 1.25, 1.5, 2.0];
 
-function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdateProgress, onRefresh,
+function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdateProgress, onRefresh, userId,
   nowPlaying, setNowPlaying, isAudioPlaying, audioSpeed, setAudioSpeed }) {
   // 1. 狀態管理
   const [isGenerating, setIsGenerating] = useState(false);
@@ -1796,7 +1797,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
                     course={course}
                     isAlreadyPassed={isCompleted}
                     badges={safeCourse.badges}
-                    userId={userProfile?.userId || userProfile?.UserId}
+                    userId={userId}
                     onSubmit={(score) => {
                       if (score === 100) {
                         onComplete(safeCourse.badges);
