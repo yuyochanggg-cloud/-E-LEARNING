@@ -18,6 +18,12 @@ export const gasClient = {
     }
   },
 
+  // 🔒 帶 session token 的 POST（自動從 localStorage 讀取）
+  securePost: async (action, payload = {}) => {
+    const token = localStorage.getItem('cloud_academy_token') || '';
+    return gasClient.post(action, { ...payload, sessionToken: token });
+  },
+
   // 🔴 ✨ 新增的 POST 方法 (用來處理登入、存檔等寫入動作)
   post: async (action, payload = {}) => {
     try {

@@ -277,11 +277,11 @@ const handleCourseComplete = async (badges) => {
 
     // --- 動作 1：寫入單堂課程記錄 ---
     // 這裡我們還是要傳，因為要記錄測驗成績 100 分
-    const res = await gasClient.post('completeCourse', {
+    const res = await gasClient.securePost('completeCourse', {
       userId: uId,
       courseId: cId,
       badges: badges,
-      isOJT: isOJT // 告訴後端這是 OJT，後端也不應該直接把這堂課標記為 Completed
+      isOJT: isOJT
     });
 
     if (res.success || res.status === 'success') {
@@ -309,7 +309,7 @@ const handleCourseComplete = async (badges) => {
 
       // 呼叫 updateProgress API
       // 如果是 OJT，這一步傳回去的資料跟舊的一樣（除了可能更新時間），所以徽章不會被增加
-      await gasClient.post('updateProgress', {
+      await gasClient.securePost('updateProgress', {
         userId: uId,
         progressData: newProgressData
       });
@@ -355,15 +355,18 @@ const handleCourseComplete = async (badges) => {
 
       if (response.status === 'success') {
         const profile = response.data;
-        
-        // ✨ 企業級資安：攔截首次登入
+
+        // 儲存 session token（第一次登入也要存，changePassword 會用到）
+        if (profile.sessionToken) {
+          localStorage.setItem('cloud_academy_token', profile.sessionToken);
+        }
+
         if (profile.isFirstLogin) {
-          setUserProfile(profile); // 暫存身分，但不寫入 LocalStorage，也不抓儀表板資料
-          setIsFirstLoginMode(true); // 切換至強制換密碼畫面
-        } else {
-          // 正常登入
           setUserProfile(profile);
-          localStorage.setItem('cloud_academy_user', JSON.stringify(profile)); // 升級為快取整個 JSON
+          setIsFirstLoginMode(true);
+        } else {
+          setUserProfile(profile);
+          localStorage.setItem('cloud_academy_user', JSON.stringify(profile));
           fetchDashboardData(profile.userId || profile.UserId);
         }
       } else {
@@ -393,7 +396,7 @@ const handleCourseComplete = async (badges) => {
       setLoginError('');
       
       // 👇👇👇 CTO 關鍵開刀位置：注意這裡的括號，已經把 action 獨立出來了 👇👇👇
-      const response = await gasClient.post('changePassword', {
+      const response = await gasClient.securePost('changePassword', {
         userId: userProfile.userId || userProfile.UserId,
         newPassword: newPassword.trim()
       });
@@ -417,21 +420,24 @@ const handleCourseComplete = async (badges) => {
 
   // 🚪 處理登出
   const handleLogout = () => {
-    localStorage.removeItem('cloud_academy_user'); // 清除新版 Token
-    localStorage.removeItem('cloud_academy_userId'); // 兼容並清除舊版
-    window.location.reload(); 
+    localStorage.removeItem('cloud_academy_user');
+    localStorage.removeItem('cloud_academy_userId');
+    localStorage.removeItem('cloud_academy_token');
+    window.location.reload();
   };
 
 // ⏱️ 處理學習進度與時數更新 (修復全白畫面 Bug)
   const handleUpdateProgress = async (courseId, spentMinutes) => {
-    console.log(`[學習追蹤] 課程 ${courseId} 累積觀看: ${spentMinutes} 分鐘`);
-    
-    // 防呆：如果沒有學習時間就不呼叫後端，節省 API 額度 
-    if (!spentMinutes || spentMinutes <= 0) return;
-
+    if (!spentMinutes || spentMinutes <= 0 || !userProfile) return;
     try {
-      // 未來若要同步分鐘數到資料庫，請在此呼叫 updateProgress API
-      // 目前先在前端紀錄，避免全白畫面
+      await gasClient.securePost('updateProgress', {
+        userId: userProfile.userId || userProfile.UserId,
+        progressData: {
+          completedCourses: progressData?.completedCourses || [],
+          earnedBadges:     progressData?.earnedBadges     || [],
+          totalLearningMinutes: (progressData?.totalLearningMinutes || 0) + spentMinutes
+        }
+      });
     } catch (error) {
       console.error("進度更新失敗", error);
     }
@@ -1228,7 +1234,9 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
   async function fetchPendingTasks() {
     setIsLoading(true);
     try {
-      const res = await gasClient.post('getPendingOJTTasks', {});
+      const res = await gasClient.securePost('getPendingOJTTasks', {
+        requestUserId: userId
+      });
       if (res.success || res.status === 'success') {
         setTasks(res.tasks || res.data?.tasks || []);
       }
@@ -1255,7 +1263,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
 
   async function handleReview(rowNumber, newStatus) {
     if (!window.confirm(newStatus === 'approved' ? '確定核准？' : '確定退回？')) return;
-    const res = await gasClient.post('reviewOJTTask', { rowNumber, newStatus });
+    const res = await gasClient.securePost('reviewOJTTask', { rowNumber, newStatus, requestUserId: userId });
     if (res.success) {
       showToast(newStatus === 'approved' ? '已核准！' : '已退回！', newStatus === 'approved' ? 'success' : 'info');
       fetchPendingTasks();
@@ -1263,7 +1271,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
   }
 
   async function handleToggleMandatory(courseId, currentlyOn) {
-    await gasClient.post('setDeptMandatory', { deptId: selectedDept, courseId, isAdd: !currentlyOn });
+    await gasClient.securePost('setDeptMandatory', { deptId: selectedDept, courseId, isAdd: !currentlyOn, requestUserId: userId });
     setDeptMandatory(prev => {
       const next = new Set(prev);
       currentlyOn ? next.delete(courseId) : next.add(courseId);
@@ -1784,15 +1792,16 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
                 <div className="animate-fade-in">
                   {/* 🚨 這裡必須是呼叫你的題目組件：QuizSection！ */}
                   {/* 如果你的題目長在這裡，那就絕對不能在下面塞「上傳按鈕」的程式碼 */}
-                  <QuizSection 
-                    course={course} 
-                    isAlreadyPassed={isCompleted} 
+                  <QuizSection
+                    course={course}
+                    isAlreadyPassed={isCompleted}
                     badges={safeCourse.badges}
+                    userId={userProfile?.userId || userProfile?.UserId}
                     onSubmit={(score) => {
                       if (score === 100) {
                         onComplete(safeCourse.badges);
                       }
-                    }} 
+                    }}
                   />
                   {/* (檢查看看是不是這一行下面不小心多出了上傳照片的代碼？如果有，把它刪掉) */}
                 </div>
@@ -1937,7 +1946,7 @@ function AdvancedCloudAudioPlayer({ course }) {
   );
 }
 
-function QuizSection({ course, onSubmit, isAlreadyPassed, badges }) {
+function QuizSection({ course, onSubmit, isAlreadyPassed, badges, userId }) {
   // --- 1. 資料整合層 ---
   const quizData = useMemo(() => {
     if (Array.isArray(course.quiz) && course.quiz.length > 0) return course.quiz;
@@ -1958,35 +1967,44 @@ function QuizSection({ course, onSubmit, isAlreadyPassed, badges }) {
     setAnswers({ ...answers, [qIndex]: oIndex });
   };
 
-  const handleSubmitQuiz = () => {
-  if (!hasQuiz) return;
-  if (Object.keys(answers).length < quizData.length) {
-    showToast('請回答所有問題後再送出！', 'warning');
-    return;
-  }
-
-  let correctCount = 0;
-  quizData.forEach((q, idx) => { if (answers[idx] === q.answer) correctCount++; });
-  const finalScore = Math.round((correctCount / quizData.length) * 100);
-  
-  setScore(finalScore);
-  setSubmitted(true);
-
-  // ✨ 關鍵攔截
-  if (finalScore === 100) {
-    const isOJT = String(course.category).trim() === '實戰解鎖';
-
-    if (isOJT) {
-      // 🚩 情境 A：OJT 課程。滿分了，但我們「絕對不執行」onSubmit(finalScore)
-      // 因為執行了 onSubmit 就會把完課狀態寫進 Sheets，導致徽章直接亮起
-      console.log("OJT 測驗達標，等待檔案上傳...");
-      showToast('測驗滿分！請完成下方實戰檔案上傳，待管理員審核後才算正式完課。', 'warning');
-    } else {
-      // 🚩 情境 B：一般課程。滿分即完課。
-      onSubmit(finalScore);
+  const handleSubmitQuiz = async () => {
+    if (!hasQuiz) return;
+    if (Object.keys(answers).length < quizData.length) {
+      showToast('請回答所有問題後再送出！', 'warning');
+      return;
     }
-  }
-};
+
+    try {
+      const courseId = course.id || course.CourseId;
+      const answersArr = quizData.map((_, idx) => (answers[idx] !== undefined ? answers[idx] : -1));
+
+      const result = await gasClient.securePost('submitQuiz', {
+        userId: userId,
+        courseId: courseId,
+        answers: answersArr
+      });
+
+      if (result.status !== 'success') {
+        showToast(result.message || '判分失敗，請再試一次', 'error');
+        return;
+      }
+
+      const finalScore = result.score;
+      setScore(finalScore);
+      setSubmitted(true);
+
+      if (finalScore === 100) {
+        const isOJT = String(course.category).trim() === '實戰解鎖';
+        if (isOJT) {
+          showToast('測驗滿分！請完成下方實戰檔案上傳，待管理員審核後才算正式完課。', 'warning');
+        } else {
+          onSubmit(finalScore);
+        }
+      }
+    } catch (err) {
+      showToast('連線異常，請稍後再試', 'error');
+    }
+  };
 
   const resetQuiz = () => { setAnswers({}); setSubmitted(false); setScore(0); };
 
