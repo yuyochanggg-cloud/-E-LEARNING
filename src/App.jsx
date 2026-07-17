@@ -1557,7 +1557,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     }
     setIsGenerating(true);
     try {
-      const res = await gasClient.post('generateAiContent', { courseId });
+      const res = await gasClient.securePost('generateAiContent', { courseId, userId });
       if (res.success || res.status === 'success') {
         showToast('AI 助教已完成重點摘要與測驗題目！', 'success');
         if (onRefresh) onRefresh();
