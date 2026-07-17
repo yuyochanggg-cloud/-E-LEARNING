@@ -5,5 +5,5 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   // ✨ 確保這裡跟你的 GitHub 專案名稱完全一致
-  base: '/-E-LEARNING/', 
+  base: '/',
 })
