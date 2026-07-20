@@ -8,7 +8,7 @@ import {
   ShieldCheck, Clock, Flame, Sun, Heart, TrendingUp, Gem,
   Cloud, AlertCircle, Info, ExternalLink, Rocket, BatteryCharging,
   Briefcase, Users, Target, Map, UploadCloud, Sparkles, Mic,
-  Lock, Key
+  Lock, Key, Mail
 } from 'lucide-react';
 
 import { gasClient } from './utils/gasClient';
@@ -180,6 +180,7 @@ export default function App() {
   const [isFirstLoginMode, setIsFirstLoginMode] = useState(false); // ✨ 新增：控制是否顯示強制換密碼畫面
   const [newPassword, setNewPassword] = useState(''); // ✨ 新增：新密碼
   const [confirmPassword, setConfirmPassword] = useState(''); // ✨ 新增：確認新密碼
+  const [notifyEmail, setNotifyEmail] = useState(''); // 首次登入蒐集提醒信箱
   
   const [progressData, setProgressData] = useState({
     completedCourses: [],
@@ -390,17 +391,20 @@ const handleCourseComplete = async (badges) => {
       setLoginError('兩次輸入的新密碼不一致，請重新確認');
       return;
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notifyEmail.trim())) {
+      setLoginError('請輸入一個有效的信箱，之後會用來寄送必修課提醒');
+      return;
+    }
 
     try {
       setIsLoggingIn(true);
       setLoginError('');
-      
-      // 👇👇👇 CTO 關鍵開刀位置：注意這裡的括號，已經把 action 獨立出來了 👇👇👇
+
       const response = await gasClient.securePost('changePassword', {
         userId: userProfile.userId || userProfile.UserId,
-        newPassword: newPassword.trim()
+        newPassword: newPassword.trim(),
+        notifyEmail: notifyEmail.trim()
       });
-      // 👆👆👆 👆👆👆
 
       if (response.status === 'success') {
         const updatedProfile = { ...userProfile, isFirstLogin: false };
@@ -585,8 +589,20 @@ const handleCourseComplete = async (badges) => {
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><CheckCircle size={20} /></div>
                     <input
-                      type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChangePassword()}
+                      type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
                       placeholder="請再次輸入新密碼"
+                      className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
+                      disabled={isLoggingIn}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">個人聯絡信箱</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><Mail size={20} /></div>
+                    <input
+                      type="email" value={notifyEmail} onChange={(e) => setNotifyEmail(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChangePassword()}
+                      placeholder="用來接收必修課提醒通知"
                       className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
                       disabled={isLoggingIn}
                     />

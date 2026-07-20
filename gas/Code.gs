@@ -209,7 +209,7 @@ function verifyLogin({ userId, password }) {
 // → { status:'success' }
 // ============================================================
 
-function changePassword({ userId, oldPassword, newPassword, sessionToken }) {
+function changePassword({ userId, oldPassword, newPassword, notifyEmail, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
@@ -231,6 +231,9 @@ function changePassword({ userId, oldPassword, newPassword, sessionToken }) {
     try {
       sheet.getRange(i + 1, cols.Password + 1).setValue(newPassword);
       sheet.getRange(i + 1, cols.IsFirstLogin + 1).setValue(false);
+      if (notifyEmail) {
+        sheet.getRange(i + 1, cols.Email + 1).setValue(String(notifyEmail).trim());
+      }
     } finally {
       lock.releaseLock();
     }
@@ -1513,7 +1516,6 @@ function checkOverdueAndNotify() {
     const name      = row[userCols.Name];
     const createdAt = row[userCols.CreatedAt] ? new Date(row[userCols.CreatedAt]) : null;
     const dept      = String(row[userCols.Department] || '').trim();
-    if (!email) continue;
 
     const completed = completedMap[userId] || new Set();
     const overdueTitles = [];
@@ -1539,17 +1541,19 @@ function checkOverdueAndNotify() {
 
     if (overdueTitles.length === 0) continue;
 
-    try {
-      MailApp.sendEmail({
-        to: email,
-        subject: '【良興雲端學院】必修課逾期提醒',
-        body: `${name} 您好，\n\n以下必修課程已超過完成期限，請盡快完成：\n\n` +
-              overdueTitles.map(t => '・' + t).join('\n') +
-              `\n\n請登入良興雲端學院完成上述課程。`
-      });
-      notifiedCount++;
-    } catch (err) {
-      Logger.log(`寄信失敗（${userId}）：${err.toString()}`);
+    if (email) {
+      try {
+        MailApp.sendEmail({
+          to: email,
+          subject: '【良興雲端學院】必修課逾期提醒',
+          body: `${name} 您好，\n\n以下必修課程已超過完成期限，請盡快完成：\n\n` +
+                overdueTitles.map(t => '・' + t).join('\n') +
+                `\n\n請登入良興雲端學院完成上述課程。`
+        });
+        notifiedCount++;
+      } catch (err) {
+        Logger.log(`寄信失敗（${userId}）：${err.toString()}`);
+      }
     }
 
     if (dept) {
