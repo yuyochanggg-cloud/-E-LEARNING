@@ -55,6 +55,7 @@ function doPost(e) {
     const handlers = {
       verifyLogin:        verifyLogin,
       changePassword:     changePassword,
+      updateNotifyEmail:  updateNotifyEmail,
       getCourses:         getCourses,
       getProgress:        getProgress,
       completeCourse:     completeCourse,
@@ -196,6 +197,7 @@ function verifyLogin({ userId, password }) {
         role:         r[cols.Role],
         department:   String(r[cols.Department] || '').trim(),
         isFirstLogin: r[cols.IsFirstLogin] === true || r[cols.IsFirstLogin] === 'TRUE',
+        needsEmail:   !String(r[cols.Email] || '').trim(),
         sessionToken
       }
     };
@@ -240,6 +242,40 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
     return { status: 'success' };
   }
   return { status: 'error', message: '找不到此員工' };
+}
+
+// ============================================================
+// updateNotifyEmail
+// POST { userId, email, sessionToken }
+// → { status:'success' }
+// 用途：既有帳號（已完成首次登入、不會再走 changePassword 那條路）
+//      登入時如果 Email 欄位是空的，前端會彈一個小視窗補填，呼叫這個。
+// ============================================================
+
+function updateNotifyEmail({ userId, email, sessionToken }) {
+  const err = _requireSession(sessionToken, userId);
+  if (err) return { status: 'error', message: err };
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())) {
+    return { status: 'error', message: '請輸入有效的信箱' };
+  }
+
+  const sheet = getSheet(SHEET_NAMES.USERS);
+  const cols  = _colMap(sheet);
+  const rows  = sheet.getDataRange().getValues();
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(5000);
+  try {
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][cols.UserId]).trim() !== String(userId).trim()) continue;
+      sheet.getRange(i + 1, cols.Email + 1).setValue(String(email).trim());
+      return { status: 'success' };
+    }
+    return { status: 'error', message: '找不到此員工' };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ============================================================

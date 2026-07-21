@@ -181,7 +181,10 @@ export default function App() {
   const [newPassword, setNewPassword] = useState(''); // ✨ 新增：新密碼
   const [confirmPassword, setConfirmPassword] = useState(''); // ✨ 新增：確認新密碼
   const [notifyEmail, setNotifyEmail] = useState(''); // 首次登入蒐集提醒信箱
-  
+  const [showEmailPrompt, setShowEmailPrompt] = useState(false); // 既有帳號補填信箱的小視窗
+  const [promptEmail, setPromptEmail] = useState('');
+  const [promptEmailError, setPromptEmailError] = useState('');
+
   const [progressData, setProgressData] = useState({
     completedCourses: [],
     earnedBadges: [],
@@ -368,6 +371,7 @@ const handleCourseComplete = async (badges) => {
         } else {
           setUserProfile(profile);
           localStorage.setItem('cloud_academy_user', JSON.stringify(profile));
+          if (profile.needsEmail) setShowEmailPrompt(true);
           fetchDashboardData(profile.userId || profile.UserId);
         }
       } else {
@@ -407,7 +411,7 @@ const handleCourseComplete = async (badges) => {
       });
 
       if (response.status === 'success') {
-        const updatedProfile = { ...userProfile, isFirstLogin: false };
+        const updatedProfile = { ...userProfile, isFirstLogin: false, needsEmail: false };
         setUserProfile(updatedProfile);
         localStorage.setItem('cloud_academy_user', JSON.stringify(updatedProfile));
         setIsFirstLoginMode(false);
@@ -417,6 +421,34 @@ const handleCourseComplete = async (badges) => {
       }
     } catch (error) {
       setLoginError('伺服器連線異常，請聯繫人資部門');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  // 📧 既有帳號補填提醒信箱（不強制重設密碼的溫和版）
+  const handleSubmitNotifyEmail = async () => {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(promptEmail.trim())) {
+      setPromptEmailError('請輸入有效的信箱');
+      return;
+    }
+    try {
+      setIsLoggingIn(true);
+      setPromptEmailError('');
+      const response = await gasClient.securePost('updateNotifyEmail', {
+        userId: userProfile.userId || userProfile.UserId,
+        email: promptEmail.trim()
+      });
+      if (response.status === 'success') {
+        const updatedProfile = { ...userProfile, needsEmail: false };
+        setUserProfile(updatedProfile);
+        localStorage.setItem('cloud_academy_user', JSON.stringify(updatedProfile));
+        setShowEmailPrompt(false);
+      } else {
+        setPromptEmailError(response.message || '儲存失敗，請再試一次');
+      }
+    } catch (error) {
+      setPromptEmailError('伺服器連線異常，請稍後再試');
     } finally {
       setIsLoggingIn(false);
     }
@@ -454,6 +486,7 @@ const handleCourseComplete = async (badges) => {
       try {
         const profile = JSON.parse(storedUser);
         setUserProfile(profile);
+        if (profile.needsEmail) setShowEmailPrompt(true);
         fetchDashboardData(profile.userId || profile.UserId);
       } catch (e) {
         setIsLoading(false);
@@ -645,6 +678,39 @@ const handleCourseComplete = async (badges) => {
   return (
     <>
     <Toast />
+    {showEmailPrompt && (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+          <div className="flex items-center mb-3">
+            <Mail className="w-6 h-6 text-blue-600 mr-2" />
+            <h3 className="text-lg font-bold text-slate-800">補填聯絡信箱</h3>
+          </div>
+          <p className="text-sm text-slate-500 mb-4">用來接收必修課逾期提醒，之後隨時可以在這裡更新。</p>
+          <input
+            type="email" value={promptEmail} onChange={(e) => setPromptEmail(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSubmitNotifyEmail()}
+            placeholder="you@example.com"
+            className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium text-slate-700 mb-2"
+            disabled={isLoggingIn}
+          />
+          {promptEmailError && <p className="text-sm text-red-500 mb-3">{promptEmailError}</p>}
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={() => setShowEmailPrompt(false)}
+              className="flex-1 py-2.5 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-colors"
+            >
+              稍後再填
+            </button>
+            <button
+              onClick={handleSubmitNotifyEmail} disabled={isLoggingIn}
+              className="flex-1 py-2.5 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-60"
+            >
+              {isLoggingIn ? '儲存中...' : '儲存'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
       {/* --- 左側導航列 --- */}
       <nav className="bg-slate-900 text-slate-300 w-full md:w-64 flex-shrink-0 flex md:flex-col justify-between md:justify-start shadow-xl z-20 fixed md:sticky bottom-0 md:top-0 h-16 md:h-screen">
