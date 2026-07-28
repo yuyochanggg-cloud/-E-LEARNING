@@ -2,22 +2,6 @@
 const GAS_WEB_APP_URL = import.meta.env.VITE_GAS_API_URL;
 
 export const gasClient = {
-  // 🟢 你原本的 GET 方法 (完美保留，完全不變)
-  get: async (action, params = {}) => {
-    const query = new URLSearchParams({ action, ...params }).toString();
-    const url = `${GAS_WEB_APP_URL}?${query}`;
-    try {
-      const response = await fetch(url, { method: 'GET', mode: 'cors' });
-      if (!response.ok) throw new Error(`HTTP 錯誤: ${response.status}`);
-      const result = await response.json();
-      if (result.status === 'error') throw new Error(result.message);
-      return result.data;
-    } catch (error) {
-      console.error(`[GET Error]:`, error);
-      throw error; 
-    }
-  },
-
   // 🔒 帶 session token 的 POST（自動從 localStorage 讀取）
   securePost: async (action, payload = {}) => {
     const token = localStorage.getItem('cloud_academy_token') || '';

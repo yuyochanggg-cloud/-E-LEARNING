@@ -13,6 +13,8 @@ import {
 
 import { gasClient } from './utils/gasClient';
 
+const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+
 // ==========================================
 // 全域音訊播放器 (singleton，跨頁面背景播放)
 // ==========================================
@@ -219,8 +221,8 @@ export default function App() {
       setIsLoading(true);
       
       const [coursesRes, progressRes] = await Promise.all([
-        gasClient.post('getCourses', { userId: validUserId }),
-        gasClient.post('getProgress', { userId: validUserId }) 
+        gasClient.securePost('getCourses', { userId: validUserId }),
+        gasClient.securePost('getProgress', { userId: validUserId })
       ]);
       
       // 🛡️ 終極防護網：不管後端傳什麼鬼東西來，我們都確保它變成陣列
@@ -395,7 +397,7 @@ const handleCourseComplete = async (badges) => {
       setLoginError('兩次輸入的新密碼不一致，請重新確認');
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notifyEmail.trim())) {
+    if (!isValidEmail(notifyEmail.trim())) {
       setLoginError('請輸入一個有效的信箱，之後會用來寄送必修課提醒');
       return;
     }
@@ -428,7 +430,7 @@ const handleCourseComplete = async (badges) => {
 
   // 📧 既有帳號補填提醒信箱（不強制重設密碼的溫和版）
   const handleSubmitNotifyEmail = async () => {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(promptEmail.trim())) {
+    if (!isValidEmail(promptEmail.trim())) {
       setPromptEmailError('請輸入有效的信箱');
       return;
     }
@@ -466,7 +468,7 @@ const handleCourseComplete = async (badges) => {
   const handleUpdateProgress = async (courseId, spentMinutes) => {
     if (!spentMinutes || spentMinutes <= 0 || !userProfile) return;
     try {
-      await gasClient.securePost('updateProgress', {
+      const res = await gasClient.securePost('updateProgress', {
         userId: userProfile.userId || userProfile.UserId,
         progressData: {
           completedCourses: progressData?.completedCourses || [],
@@ -474,6 +476,10 @@ const handleCourseComplete = async (badges) => {
           totalLearningMinutes: (progressData?.totalLearningMinutes || 0) + spentMinutes
         }
       });
+      // 用後端寫入後的實際值更新本地 state，避免同一次登入內連看多門課時互相覆蓋累計時數
+      if (res.status === 'success' && res.data) {
+        setProgressData(res.data);
+      }
     } catch (error) {
       console.error("進度更新失敗", error);
     }
@@ -1309,7 +1315,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
   // admin 進入時先拉部門清單
   useEffect(() => {
     if (isAdmin) {
-      gasClient.post('getDepartments', { requestUserId: userId })
+      gasClient.securePost('getDepartments', { requestUserId: userId })
         .then(res => { if (res.status === 'success') setDepartments(res.departments || []); });
     }
   }, []);
@@ -1330,7 +1336,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
     if (!selectedDept) return;
     setIsLoading(true);
     try {
-      const res = await gasClient.post('getDeptReport', { deptId: selectedDept, requestUserId: userId });
+      const res = await gasClient.securePost('getDeptReport', { deptId: selectedDept, requestUserId: userId });
       if (res.status === 'success') setDeptReport(res.data);
     } finally { setIsLoading(false); }
   }
@@ -1339,7 +1345,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
     if (!selectedDept) return;
     setIsLoading(true);
     try {
-      const res = await gasClient.post('getDeptMandatory', { deptId: selectedDept });
+      const res = await gasClient.securePost('getDeptMandatory', { deptId: selectedDept, requestUserId: userId });
       if (res.status === 'success') setDeptMandatory(new Set(res.courseIds || []));
     } finally { setIsLoading(false); }
   }
@@ -1603,8 +1609,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
 
     return () => {
       const endTime = Date.now();
-      // 測試階段：6000 代表 6 秒算一分鐘，正式上線請改為 60000
-      const spentMinutes = Math.floor((endTime - startTime) / 6000); 
+      const spentMinutes = Math.floor((endTime - startTime) / 60000);
       console.log(`⏱️ 下課！本次累積時數：${spentMinutes}`);
 
       if (spentMinutes > 0 && onUpdateProgress) {
@@ -2187,11 +2192,11 @@ function OJTSection({ course }) {
       reader.onload = async () => {
         try {
           const base64String = reader.result.split(',')[1];
-          const response = await gasClient.post('submitOJT', {
+          const response = await gasClient.securePost('submitOJT', {
             userId: currentUserId,
             courseId: course.id || course.CourseId,
-            fileName: file.name, 
-            mimeType: file.type, 
+            fileName: file.name,
+            mimeType: file.type,
             base64Data: base64String,
             submitType: 'file' // 標註為檔案提交
           });
@@ -2223,7 +2228,7 @@ function OJTSection({ course }) {
     setOjtStatus('uploading');
 
     try {
-      const response = await gasClient.post('submitOJT', {
+      const response = await gasClient.securePost('submitOJT', {
         userId: currentUserId,
         courseId: course.id || course.CourseId,
         linkUrl: ojtLink,

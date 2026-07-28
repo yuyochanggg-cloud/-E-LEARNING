@@ -165,6 +165,10 @@ function _requireManagerOrAdmin(sessionToken, userId) {
   return null;
 }
 
+function _isValidEmail(v) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || '').trim());
+}
+
 // ============================================================
 // 1. verifyLogin
 // POST { userId, password }
@@ -215,6 +219,10 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
+  if (notifyEmail && !_isValidEmail(notifyEmail)) {
+    return { status: 'error', message: '請輸入有效的信箱' };
+  }
+
   const sheet = getSheet(SHEET_NAMES.USERS);
   const cols  = _colMap(sheet);
   const rows  = sheet.getDataRange().getValues();
@@ -256,7 +264,7 @@ function updateNotifyEmail({ userId, email, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())) {
+  if (!_isValidEmail(email)) {
     return { status: 'error', message: '請輸入有效的信箱' };
   }
 
@@ -284,7 +292,10 @@ function updateNotifyEmail({ userId, email, sessionToken }) {
 // → Array of course objects（前端容錯：直接回陣列）
 // ============================================================
 
-function getCourses({ userId }) {
+function getCourses({ userId, sessionToken }) {
+  const err = _requireSession(sessionToken, userId);
+  if (err) return { status: 'error', message: err };
+
   const courseSheet   = getSheet(SHEET_NAMES.COURSES);
   const ojtSheet      = getSheet(SHEET_NAMES.OJT_TASKS);
   const progressSheet = getSheet(SHEET_NAMES.PROGRESS);
@@ -382,7 +393,10 @@ function getCourses({ userId }) {
 // → { status:'success', data:{ completedCourses, earnedBadges, totalLearningMinutes } }
 // ============================================================
 
-function getProgress({ userId }) {
+function getProgress({ userId, sessionToken }) {
+  const err = _requireSession(sessionToken, userId);
+  if (err) return { status: 'error', message: err };
+
   const sheet = getSheet(SHEET_NAMES.USER_PROGRESS);
   const cols  = _colMap(sheet);
   const rows  = sheet.getDataRange().getValues();
@@ -465,12 +479,18 @@ function updateProgress({ userId, progressData, sessionToken }) {
     const badgesJSON    = JSON.stringify(progressData.earnedBadges || []);
     const minutes       = progressData.totalLearningMinutes || 0;
 
+    const savedData = {
+      completedCourses: safeParseJSON(completedJSON, []),
+      earnedBadges: safeParseJSON(badgesJSON, []),
+      totalLearningMinutes: minutes
+    };
+
     for (let i = 1; i < rows.length; i++) {
       if (String(rows[i][cols.UserId]).trim() !== String(userId).trim()) continue;
       sheet.getRange(i + 1, cols.CompletedCourses + 1).setValue(completedJSON);
       sheet.getRange(i + 1, cols.EarnedBadges + 1).setValue(badgesJSON);
       sheet.getRange(i + 1, cols.TotalLearningMinutes + 1).setValue(minutes);
-      return { status: 'success' };
+      return { status: 'success', data: savedData };
     }
 
     // 新員工，建立一列
@@ -480,7 +500,7 @@ function updateProgress({ userId, progressData, sessionToken }) {
       EarnedBadges: badgesJSON,
       TotalLearningMinutes: minutes
     }));
-    return { status: 'success' };
+    return { status: 'success', data: savedData };
   } finally {
     lock.releaseLock();
   }
@@ -492,7 +512,15 @@ function updateProgress({ userId, progressData, sessionToken }) {
 // → { status:'success' }
 // ============================================================
 
-function submitOJT({ userId, courseId, submitType, fileName, mimeType, base64Data, linkUrl }) {
+function submitOJT({ userId, courseId, submitType, fileName, mimeType, base64Data, linkUrl, sessionToken }) {
+  const authErr = _requireSession(sessionToken, userId);
+  if (authErr) return { status: 'error', message: authErr };
+
+  const MAX_BASE64_LENGTH = 5 * 1024 * 1024 * 1.37; // 對應前端 5MB 上限（base64 膨脹約1.37倍）
+  if (submitType === 'file' && base64Data && base64Data.length > MAX_BASE64_LENGTH) {
+    return { status: 'error', message: '檔案過大，請上傳 5MB 以內的檔案' };
+  }
+
   const sheet  = getSheet(SHEET_NAMES.OJT_TASKS);
   const cols   = _colMap(sheet);
   const taskId = `OJT-${courseId}-${userId}-${Date.now()}`;
@@ -1196,7 +1224,10 @@ function fixMaterialUrls() {
 // → { status:'success', data:{ totalUsers, overallMandatoryRate, employees, courseStats } }
 // ============================================================
 
-function getDeptReport({ deptId, requestUserId }) {
+function getDeptReport({ deptId, requestUserId, sessionToken }) {
+  const authErr = _requireManagerOrAdmin(sessionToken, requestUserId);
+  if (authErr) return { status: 'error', message: authErr };
+
   const userSheet = getSheet(SHEET_NAMES.USERS);
   const userCols  = _colMap(userSheet);
   const userRows  = userSheet.getDataRange().getValues();
@@ -1332,7 +1363,10 @@ function getDeptReport({ deptId, requestUserId }) {
 // → { status:'success', courseIds:[] }
 // ============================================================
 
-function getDeptMandatory({ deptId }) {
+function getDeptMandatory({ deptId, requestUserId, sessionToken }) {
+  const err = _requireManagerOrAdmin(sessionToken, requestUserId);
+  if (err) return { status: 'error', message: err };
+
   const sheet = getSheet(SHEET_NAMES.DEPT_MANDATORY);
   const cols  = _colMap(sheet);
   const rows  = sheet.getDataRange().getValues();
@@ -1425,22 +1459,13 @@ function submitQuiz({ userId, courseId, answers, sessionToken }) {
 // → { status:'success', departments:[] }
 // ============================================================
 
-function getDepartments({ requestUserId }) {
+function getDepartments({ requestUserId, sessionToken }) {
+  const authErr = _requireManagerOrAdmin(sessionToken, requestUserId);
+  if (authErr) return { status: 'error', message: authErr };
+
   const userSheet = getSheet(SHEET_NAMES.USERS);
   const cols      = _colMap(userSheet);
   const userRows  = userSheet.getDataRange().getValues();
-
-  // 驗證：admin 或 manager 都可以呼叫
-  let requesterRole = '';
-  for (let i = 1; i < userRows.length; i++) {
-    if (String(userRows[i][cols.UserId]).trim() === String(requestUserId).trim()) {
-      requesterRole = String(userRows[i][cols.Role] || '').toLowerCase();
-      break;
-    }
-  }
-  if (requesterRole !== 'admin' && requesterRole !== 'manager') {
-    return { status: 'error', message: '權限不足' };
-  }
 
   const deptMap = {};
   for (let i = 1; i < userRows.length; i++) {
