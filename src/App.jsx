@@ -224,7 +224,16 @@ export default function App() {
         gasClient.securePost('getCourses', { userId: validUserId }),
         gasClient.securePost('getProgress', { userId: validUserId })
       ]);
-      
+
+      // 🔐 session 過期/驗證失敗：清掉登入狀態並導回登入頁，不要靜默顯示空清單
+      if (coursesRes && coursesRes.status === 'error') {
+        localStorage.removeItem('cloud_academy_user');
+        localStorage.removeItem('cloud_academy_token');
+        showToast(coursesRes.message || '登入已逾期，請重新登入', 'error');
+        window.location.reload();
+        return;
+      }
+
       // 🛡️ 終極防護網：不管後端傳什麼鬼東西來，我們都確保它變成陣列
       let courses = [];
       if (Array.isArray(coursesRes)) {
