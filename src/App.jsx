@@ -1744,6 +1744,27 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       );
     }
 
+    // 外部連結型課程(如互動網頁、學習地圖)→ 開新分頁按鈕,不用 iframe 硬嵌
+    if (safeCourse.materialType === 'link') {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 gap-5 p-6">
+          <div className="w-16 h-16 rounded-full bg-blue-500/20 text-blue-300 flex items-center justify-center">
+            <Map className="w-8 h-8" />
+          </div>
+          <p className="text-white font-bold text-center">{safeCourse.title}</p>
+          <a
+            href={safeCourse.materialUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-xl font-bold shadow-lg hover:bg-blue-400 transition-all"
+          >
+            前往學習地圖 <ExternalLink className="w-4 h-4" />
+          </a>
+          <p className="text-slate-400 text-xs">看完後,回來下方完成小測驗即可完課</p>
+        </div>
+      );
+    }
+
     // 影片 / 其他 → iframe
     return (
       <div className="w-full h-full bg-black relative">
