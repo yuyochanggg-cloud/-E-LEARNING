@@ -1100,6 +1100,37 @@ function forceVertexAuth_v2() {
 }
 
 // ============================================================
+// [工具函式] fixInflatedLearningMinutes()
+//
+// 用途：修正計時器 bug 造成的歷史時數膨脹。前端計時器除數原本寫死
+//       6000（6秒算1分鐘），正式上線後才修正為 60000，這之前用
+//       updateProgress 存進 UserProgress 的 TotalLearningMinutes
+//       全部是實際值的 10 倍，跑這個函式把現有數字除以 10 修正回來。
+//
+// 使用方式：GAS 編輯器選這個函式，執行一次即可（只需要跑一次，
+//          重複執行會把已經修正過的值再除一次 10，變成錯誤數字）
+//          執行後看「執行紀錄」確認修正了幾筆、每筆修正前後的值
+// ============================================================
+function fixInflatedLearningMinutes() {
+  const sheet = getSheet(SHEET_NAMES.USER_PROGRESS);
+  const cols  = _colMap(sheet);
+  const rows  = sheet.getDataRange().getValues();
+
+  let fixed = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const current = Number(rows[i][cols.TotalLearningMinutes]) || 0;
+    if (current <= 0) continue;
+
+    const corrected = Math.round(current / 10);
+    sheet.getRange(i + 1, cols.TotalLearningMinutes + 1).setValue(corrected);
+    Logger.log(`${rows[i][cols.UserId]}：${current} → ${corrected}`);
+    fixed++;
+  }
+
+  Logger.log(`\n完成，共修正 ${fixed} 筆。`);
+}
+
+// ============================================================
 // [工具函式] fixMaterialUrls(folderId)
 //
 // 用途：把 Drive 資料夾內的檔案批次對應到 Courses sheet，
