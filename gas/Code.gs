@@ -56,7 +56,9 @@ function doPost(e) {
       verifyLogin:        verifyLogin,
       changePassword:     changePassword,
       updateNotifyEmail:  updateNotifyEmail,
+      bootstrap:          bootstrap,
       getCourses:         getCourses,
+      getCourseDetail:    getCourseDetail,
       getProgress:        getProgress,
       completeCourse:     completeCourse,
       updateProgress:     updateProgress,
@@ -222,21 +224,108 @@ function _isValidEmail(v) {
 }
 
 // ============================================================
+// 密碼雜湊（SHA-256 + 固定 salt）
+//
+// 為什麼是漸進式而非一次性遷移：Sheet 裡原本存明碼，若直接改成只認 hash
+// 就必須先跑批次轉換，轉換出錯（欄位對不上、跑一半 timeout）會把 150 人
+// 全部鎖在門外。改成「兩種都認得，登入成功時順手把明碼換成 hash」，
+// 不需停機、不需批次作業，用久了自然全部升級完。
+//
+// salt 存在 Script Properties（PASSWORD_SALT），沒設定就用預設值——
+// 預設值只是讓功能能跑，正式環境請去指令碼屬性設一組自己的隨機字串。
+// ============================================================
+const HASH_PREFIX = 'sha256:';
+
+function _passwordSalt() {
+  return PropertiesService.getScriptProperties().getProperty('PASSWORD_SALT') || 'lx-academy-default-salt';
+}
+
+function _isHashedPassword(stored) {
+  return String(stored || '').indexOf(HASH_PREFIX) === 0;
+}
+
+function _hashPassword(plain) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(plain) + _passwordSalt(),
+    Utilities.Charset.UTF_8
+  );
+  // 轉成 hex 字串
+  const hex = bytes.map(b => {
+    const v = (b < 0 ? b + 256 : b).toString(16);
+    return v.length === 1 ? '0' + v : v;
+  }).join('');
+  return HASH_PREFIX + hex;
+}
+
+function _passwordMatches(input, stored) {
+  if (_isHashedPassword(stored)) return _hashPassword(input) === stored;
+  return input === String(stored || '').trim(); // 還沒升級的明碼
+}
+
+// ------------------------------------------------------------
+// 登入失敗次數限制（CacheService，15 分鐘視窗）
+// ------------------------------------------------------------
+const MAX_LOGIN_FAILURES = 5;
+const LOGIN_LOCK_SECONDS  = 900; // 15 分鐘
+
+function _loginFailKey(userId) { return 'loginfail_' + userId; }
+
+function _checkLoginLock(userId) {
+  const n = Number(CacheService.getScriptCache().get(_loginFailKey(userId))) || 0;
+  if (n >= MAX_LOGIN_FAILURES) {
+    return '密碼錯誤次數過多，請稍後約 15 分鐘後再試，或聯繫人資部門';
+  }
+  return null;
+}
+
+function _recordLoginFailure(userId) {
+  const cache = CacheService.getScriptCache();
+  const key   = _loginFailKey(userId);
+  const n     = (Number(cache.get(key)) || 0) + 1;
+  cache.put(key, String(n), LOGIN_LOCK_SECONDS);
+}
+
+function _clearLoginFailures(userId) {
+  CacheService.getScriptCache().remove(_loginFailKey(userId));
+}
+
+// ============================================================
 // 1. verifyLogin
 // POST { userId, password }
 // → { status:'success', data:{ userId, name, role, isFirstLogin } }
 // ============================================================
 
 function verifyLogin({ userId, password }) {
+  const uid = String(userId || '').trim();
+
+  // 登入嘗試次數限制：同一工號連續失敗 5 次鎖 15 分鐘。
+  // 預設密碼多為生日等易猜字串，沒有限制等於可暴力破解。
+  const lockMsg = _checkLoginLock(uid);
+  if (lockMsg) return { status: 'error', message: lockMsg };
+
   const sheet = getSheet(SHEET_NAMES.USERS);
   const { cols, rows } = _readSheet(sheet);
 
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
-    if (String(r[cols.UserId]).trim() !== String(userId).trim()) continue;
+    if (String(r[cols.UserId]).trim() !== uid) continue;
 
-    if (String(r[cols.Password]).trim() !== String(password).trim()) {
+    const stored = String(r[cols.Password]).trim();
+    if (!_passwordMatches(String(password).trim(), stored)) {
+      _recordLoginFailure(uid);
       return { status: 'error', message: '密碼錯誤' };
+    }
+    _clearLoginFailures(uid);
+
+    // 舊的明碼密碼在登入成功當下順便升級成 hash（漸進遷移，不需停機
+    // 也不需批次改資料，避免一次性遷移出錯把全員鎖在外面）
+    if (!_isHashedPassword(stored)) {
+      try {
+        sheet.getRange(i + 1, cols.Password + 1).setValue(_hashPassword(stored));
+      } catch (e) {
+        Logger.log('密碼 hash 升級失敗（不影響本次登入）：' + e.toString());
+      }
     }
 
     // 更新最後登入時間
@@ -282,14 +371,14 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
     if (String(r[cols.UserId]).trim() !== String(userId).trim()) continue;
 
     const isFirstLogin = r[cols.IsFirstLogin] === true || r[cols.IsFirstLogin] === 'TRUE';
-    if (!isFirstLogin && String(r[cols.Password]).trim() !== String(oldPassword || '').trim()) {
+    if (!isFirstLogin && !_passwordMatches(String(oldPassword || '').trim(), String(r[cols.Password]).trim())) {
       return { status: 'error', message: '舊密碼錯誤' };
     }
 
     const lock = LockService.getScriptLock();
     lock.waitLock(5000);
     try {
-      sheet.getRange(i + 1, cols.Password + 1).setValue(newPassword);
+      sheet.getRange(i + 1, cols.Password + 1).setValue(_hashPassword(newPassword));
       sheet.getRange(i + 1, cols.IsFirstLogin + 1).setValue(false);
       if (notifyEmail) {
         sheet.getRange(i + 1, cols.Email + 1).setValue(String(notifyEmail).trim());
@@ -336,16 +425,125 @@ function updateNotifyEmail({ userId, email, sessionToken }) {
 }
 
 // ============================================================
+// 課程目錄快取
+//
+// 效能關鍵：Courses 表含 Transcript（逐字稿可能上萬字）與 AiQuiz／AiSummary
+// 這些大欄位，每次請求都 getDataRange() 整表拉回來是首屏慢的主因。
+// 這裡只留課程清單需要的輕量欄位（題庫／摘要／逐字稿一律不含，只留
+// hasQuiz 旗標），快取 5 分鐘。課程內容變動時呼叫 _invalidateCourseCache()。
+//
+// 摘要與題目改由 getCourseDetail 在「點開課程時」才拉，不在清單階段付代價。
+// ============================================================
+const COURSE_CATALOG_CACHE_KEY = 'course_catalog_v1';
+
+function _invalidateCourseCache() {
+  CacheService.getScriptCache().remove(COURSE_CATALOG_CACHE_KEY);
+}
+
+function _getCourseCatalog() {
+  const cache  = CacheService.getScriptCache();
+  const cached = cache.get(COURSE_CATALOG_CACHE_KEY);
+  if (cached) {
+    const parsed = safeParseJSON(cached, null);
+    if (parsed) return parsed;
+  }
+
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
+  const catalog = [];
+  // Row 1=標題列, Row 2=範例列, Row 3~=實際資料
+  for (let i = 2; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r[cols.CourseId]) continue;
+    catalog.push({
+      id:              String(r[cols.CourseId]).trim(),
+      title:           r[cols.Title],
+      category:        r[cols.Category],
+      globalMandatory: r[cols.IsMandatory] === true || r[cols.IsMandatory] === 'TRUE',
+      duration:        r[cols.Duration],
+      badges:          r[cols.Badges] ? String(r[cols.Badges]).split(',').map(b => b.trim()) : [],
+      materialType:    r[cols.MaterialType] || 'video',
+      materialUrl:     r[cols.MaterialUrl] || '',
+      materialTextUrl: r[cols.MaterialTextUrl] || '',
+      ojtRequired:     r[cols.OjtRequired] === true || r[cols.OjtRequired] === 'TRUE',
+      ojtDescription:  r[cols.OjtDescription] || '',
+      hasQuiz:         !!r[cols.AiQuiz],
+      hasSummary:      !!r[cols.AiSummary]
+    });
+  }
+
+  try {
+    cache.put(COURSE_CATALOG_CACHE_KEY, JSON.stringify(catalog), 300); // 5分鐘
+  } catch (e) {
+    // 超過 CacheService 單鍵 100KB 上限就不快取，功能不受影響只是比較慢
+    Logger.log('課程目錄快取失敗（可能過大）：' + e.toString());
+  }
+  return catalog;
+}
+
+// ============================================================
+// bootstrap
+// POST { userId, sessionToken }
+// → { status:'success', courses:[...], progress:{...} }
+//
+// 用途：首屏一次拿齊課程清單與個人進度。原本前端要分別打 getCourses 與
+//      getProgress 兩次，每次都要付一趟 GAS 冷啟＋往返，合併成一次明顯較快。
+// ============================================================
+
+function bootstrap({ userId, sessionToken }) {
+  const err = _requireSession(sessionToken, userId);
+  if (err) return { status: 'error', message: err };
+
+  const courses  = getCourses({ userId, sessionToken });
+  if (courses && courses.status === 'error') return courses;
+
+  const progress = getProgress({ userId, sessionToken });
+  if (progress && progress.status === 'error') return progress;
+
+  return { status: 'success', courses: courses, progress: progress.data };
+}
+
+// ============================================================
+// getCourseDetail
+// POST { courseId, userId, sessionToken }
+// → { status:'success', data:{ AiSummary, quiz:[{question,options}] } }
+//
+// 題目一律剝掉 answer 才回傳（判分走 submitQuiz），摘要與題目都只在
+// 點開單一課程時才拉，不在課程清單階段付整表序列化的代價。
+// ============================================================
+
+function getCourseDetail({ courseId, userId, sessionToken }) {
+  const err = _requireSession(sessionToken, userId);
+  if (err) return { status: 'error', message: err };
+
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
+  for (let i = 2; i < rows.length; i++) {
+    if (String(rows[i][cols.CourseId]).trim() !== String(courseId).trim()) continue;
+    const quizRaw = safeParseJSON(rows[i][cols.AiQuiz], []);
+    return {
+      status: 'success',
+      data: {
+        AiSummary: rows[i][cols.AiSummary] || '',
+        quiz: (Array.isArray(quizRaw) ? quizRaw : [])
+          .filter(q => q && q.question && Array.isArray(q.options))
+          .map(q => ({ question: q.question, options: q.options }))
+      }
+    };
+  }
+  return { status: 'error', message: '找不到課程' };
+}
+
+// ============================================================
 // 3. getCourses
 // POST { userId }
 // → Array of course objects（前端容錯：直接回陣列）
+//    注意：不含 AiSummary／AiQuiz，那兩項改由 getCourseDetail 提供
 // ============================================================
 
 function getCourses({ userId, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  const { cols: courseCols,   rows: courseRows }   = _readSheet(getSheet(SHEET_NAMES.COURSES));
+  const catalog = _getCourseCatalog();
   const { cols: ojtCols,      rows: ojtRows }      = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
   const { cols: progressCols, rows: progressRows } = _readSheet(getSheet(SHEET_NAMES.PROGRESS));
   const { cols: userCols,     rows: userRows }     = _readSheet(getSheet(SHEET_NAMES.USERS));
@@ -389,37 +587,28 @@ function getCourses({ userId, sessionToken }) {
     if (status === 'approved') ojtApproved.add(courseId);
   }
 
-  // Row 1=標題列, Row 2=範例列, Row 3~=實際資料
-  const courses = [];
-  for (let i = 2; i < courseRows.length; i++) {
-    const r = courseRows[i];
-    if (!r[courseCols.CourseId]) continue;
-
-    const courseId = String(r[courseCols.CourseId]).trim();
-
-    courses.push({
-      id:             courseId,
-      CourseId:       courseId,
-      title:          r[courseCols.Title],
-      category:       r[courseCols.Category],
-      isMandatory:    r[courseCols.IsMandatory] === true || r[courseCols.IsMandatory] === 'TRUE' || deptMandatorySet.has(courseId),
-      duration:       r[courseCols.Duration],
-      badges:         r[courseCols.Badges] ? String(r[courseCols.Badges]).split(',').map(b => b.trim()) : [],
-      materialType:   r[courseCols.MaterialType] || 'video',
-      materialUrl:    r[courseCols.MaterialUrl] || '',
-      materialTextUrl:r[courseCols.MaterialTextUrl] || '',
-      ojtRequired:    r[courseCols.OjtRequired] === true || r[courseCols.OjtRequired] === 'TRUE',
-      ojtDescription: r[courseCols.OjtDescription] || '',
-      AiSummary:      r[courseCols.AiSummary] || '',
-      AiQuiz:         r[courseCols.AiQuiz] ? JSON.stringify(
-        safeParseJSON(r[courseCols.AiQuiz], []).map(function(q) { return { question: q.question, options: q.options }; })
-      ) : '',
-      isCompleted:    completedSet.has(courseId) || ojtApproved.has(courseId),
-      ojtStatus:      ojtApproved.has(courseId) ? 'approved'
-                    : ojtPending.has(courseId)  ? 'pending'
-                    : null
-    });
-  }
+  // 用快取的課程目錄 + 這位使用者的狀態疊加，不再每次整表讀 Courses
+  const courses = catalog.map(c => ({
+    id:              c.id,
+    CourseId:        c.id,
+    title:           c.title,
+    category:        c.category,
+    isGlobalMandatory: c.globalMandatory,                              // 不含部門加疊，給主管設定頁判斷用
+    isMandatory:     c.globalMandatory || deptMandatorySet.has(c.id),  // 這位使用者實際的必修判定
+    duration:        c.duration,
+    badges:          c.badges,
+    materialType:    c.materialType,
+    materialUrl:     c.materialUrl,
+    materialTextUrl: c.materialTextUrl,
+    ojtRequired:     c.ojtRequired,
+    ojtDescription:  c.ojtDescription,
+    hasQuiz:         c.hasQuiz,       // 摘要與題目改由 getCourseDetail 取得
+    hasSummary:      c.hasSummary,
+    isCompleted:     completedSet.has(c.id) || ojtApproved.has(c.id),
+    ojtStatus:       ojtApproved.has(c.id) ? 'approved'
+                   : ojtPending.has(c.id)  ? 'pending'
+                   : null
+  }));
 
   return courses; // 前端直接收陣列
 }
@@ -465,75 +654,116 @@ function completeCourse({ userId, courseId, badges, isOJT, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  if (!isOJT) {
-    const lock = LockService.getScriptLock();
-    lock.waitLock(10000);
-    try {
-      const sheet = getSheet(SHEET_NAMES.PROGRESS);
-      const { cols, rows } = _readSheet(sheet);
+  // OJT 課程的完課由 reviewOJTTask（主管核准後）觸發，這裡不寫入任何東西
+  if (isOJT) return { status: 'success', success: true };
 
-      for (let i = 1; i < rows.length; i++) {
-        if (String(rows[i][cols.UserId]).trim() === String(userId).trim() &&
-            String(rows[i][cols.CourseId]).trim() === String(courseId).trim()) {
-          return { status: 'success', success: true, message: '已存在紀錄' };
-        }
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getSheet(SHEET_NAMES.PROGRESS);
+    const { cols, rows } = _readSheet(sheet);
+
+    let alreadyExists = false;
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][cols.UserId]).trim() === String(userId).trim() &&
+          String(rows[i][cols.CourseId]).trim() === String(courseId).trim()) {
+        alreadyExists = true;
+        break;
       }
+    }
+    if (!alreadyExists) {
       sheet.appendRow(_buildRow(cols, {
         UserId: String(userId),
         CourseId: String(courseId),
         Badges: JSON.stringify(badges || []),
         CompletedAt: new Date()
       }));
-    } finally {
-      lock.releaseLock();
     }
+
+    // 同步彙總表：在後端 merge，不讓前端傳整包快照回來覆寫
+    // （前端快照會抹掉 reviewOJTTask 或另一個分頁剛寫進去的完課與徽章）
+    const merged = _mergeUserProgress(userId, {
+      addCourseIds: [String(courseId)],
+      addBadges:    badges || []
+    });
+
+    return { status: 'success', success: true, data: merged };
+  } finally {
+    lock.releaseLock();
   }
-  // OJT 課程的完課由 reviewOJTTask（核准後）觸發，這裡不寫入
-  return { status: 'success', success: true };
+}
+
+// ------------------------------------------------------------
+// 內部：UserProgress 彙總表的唯一寫入點，一律「讀出來 merge 再寫回」
+//
+// 為什麼不讓前端傳整包快照：兩個分頁同時開、或主管核准 OJT 的同時員工
+// 剛完課，後寫的那一方會用自己手上的舊快照覆蓋掉對方剛寫進去的資料
+// （last-write-wins）。改成只收 delta、在後端做聯集／累加就沒有這問題。
+//
+// 呼叫者若已持有 script lock，這裡不再重複取得（GAS 的 lock 不可重入）。
+// ------------------------------------------------------------
+function _mergeUserProgress(userId, { addCourseIds, addBadges, addMinutes }) {
+  const sheet = getSheet(SHEET_NAMES.USER_PROGRESS);
+  const { cols, rows } = _readSheet(sheet);
+
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][cols.UserId]).trim() !== String(userId).trim()) continue;
+
+    const completed = safeParseJSON(rows[i][cols.CompletedCourses], []);
+    const earned    = safeParseJSON(rows[i][cols.EarnedBadges], []);
+    const minutes   = Number(rows[i][cols.TotalLearningMinutes]) || 0;
+
+    const nextCompleted = [...new Set([...completed, ...(addCourseIds || [])])];
+    const nextEarned    = [...new Set([...earned,    ...(addBadges    || [])])];
+    const nextMinutes   = minutes + (Number(addMinutes) || 0);
+
+    sheet.getRange(i + 1, cols.CompletedCourses + 1).setValue(JSON.stringify(nextCompleted));
+    sheet.getRange(i + 1, cols.EarnedBadges + 1).setValue(JSON.stringify(nextEarned));
+    sheet.getRange(i + 1, cols.TotalLearningMinutes + 1).setValue(nextMinutes);
+
+    return {
+      completedCourses: nextCompleted,
+      earnedBadges: nextEarned,
+      totalLearningMinutes: nextMinutes
+    };
+  }
+
+  // 這位使用者還沒有彙總列，建一列
+  const fresh = {
+    completedCourses: [...new Set(addCourseIds || [])],
+    earnedBadges: [...new Set(addBadges || [])],
+    totalLearningMinutes: Number(addMinutes) || 0
+  };
+  sheet.appendRow(_buildRow(cols, {
+    UserId: String(userId),
+    CompletedCourses: JSON.stringify(fresh.completedCourses),
+    EarnedBadges: JSON.stringify(fresh.earnedBadges),
+    TotalLearningMinutes: fresh.totalLearningMinutes
+  }));
+  return fresh;
 }
 
 // ============================================================
 // 6. updateProgress
-// POST { userId, progressData:{ completedCourses, earnedBadges, totalLearningMinutes }, sessionToken }
-// → { status:'success' }
+// POST { userId, addMinutes, sessionToken }
+// → { status:'success', data:{ ...merged progress } }
+//
+// 現在只用來累加學習時數（delta），不再接受整包快照覆寫。
+// 完課與徽章一律走 completeCourse／reviewOJTTask，由後端 merge。
 // ============================================================
 
-function updateProgress({ userId, progressData, sessionToken }) {
+function updateProgress({ userId, addMinutes, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
+
+  const delta = Number(addMinutes) || 0;
+  if (delta <= 0) return { status: 'error', message: 'addMinutes 必須大於 0' };
 
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    const sheet = getSheet(SHEET_NAMES.USER_PROGRESS);
-    const { cols, rows } = _readSheet(sheet);
-
-    const completedJSON = JSON.stringify(progressData.completedCourses || []);
-    const badgesJSON    = JSON.stringify(progressData.earnedBadges || []);
-    const minutes       = progressData.totalLearningMinutes || 0;
-
-    const savedData = {
-      completedCourses: safeParseJSON(completedJSON, []),
-      earnedBadges: safeParseJSON(badgesJSON, []),
-      totalLearningMinutes: minutes
-    };
-
-    for (let i = 1; i < rows.length; i++) {
-      if (String(rows[i][cols.UserId]).trim() !== String(userId).trim()) continue;
-      sheet.getRange(i + 1, cols.CompletedCourses + 1).setValue(completedJSON);
-      sheet.getRange(i + 1, cols.EarnedBadges + 1).setValue(badgesJSON);
-      sheet.getRange(i + 1, cols.TotalLearningMinutes + 1).setValue(minutes);
-      return { status: 'success', data: savedData };
-    }
-
-    // 新員工，建立一列
-    sheet.appendRow(_buildRow(cols, {
-      UserId: String(userId),
-      CompletedCourses: completedJSON,
-      EarnedBadges: badgesJSON,
-      TotalLearningMinutes: minutes
-    }));
-    return { status: 'success', data: savedData };
+    const merged = _mergeUserProgress(userId, { addMinutes: delta });
+    return { status: 'success', data: merged };
   } finally {
     lock.releaseLock();
   }
@@ -602,9 +832,8 @@ function getPendingOJTTasks({ requestUserId, sessionToken } = {}) {
   const err = _requireManagerOrAdmin(sessionToken, requestUserId);
   if (err) return { status: 'error', message: err };
 
-  const { cols: ojtCols,    rows: ojtRows }    = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
-  const { cols: userCols,   rows: userRows }   = _readSheet(getSheet(SHEET_NAMES.USERS));
-  const { cols: courseCols, rows: courseRows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
+  const { cols: ojtCols,  rows: ojtRows }  = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
+  const { cols: userCols, rows: userRows } = _readSheet(getSheet(SHEET_NAMES.USERS));
 
   // Lookup maps
   const userMap = {};
@@ -612,9 +841,7 @@ function getPendingOJTTasks({ requestUserId, sessionToken } = {}) {
     userMap[String(userRows[i][userCols.UserId]).trim()] = { name: userRows[i][userCols.Name], role: userRows[i][userCols.Role] };
   }
   const courseMap = {};
-  for (let i = 2; i < courseRows.length; i++) {
-    courseMap[String(courseRows[i][courseCols.CourseId]).trim()] = { title: courseRows[i][courseCols.Title], category: courseRows[i][courseCols.Category] };
-  }
+  _getCourseCatalog().forEach(c => { courseMap[c.id] = { title: c.title, category: c.category }; });
 
   const tasks = [];
   for (let i = 1; i < ojtRows.length; i++) {
@@ -648,24 +875,68 @@ function getPendingOJTTasks({ requestUserId, sessionToken } = {}) {
 // → { success:true }
 // ============================================================
 
-function reviewOJTTask({ rowNumber, newStatus, requestUserId, sessionToken }) {
+function reviewOJTTask({ rowNumber, taskId, newStatus, requestUserId, sessionToken }) {
   const err = _requireManagerOrAdmin(sessionToken, requestUserId);
   if (err) return { status: 'error', message: err };
+
+  if (newStatus !== 'approved' && newStatus !== 'rejected') {
+    return { status: 'error', message: '無效的審核狀態' };
+  }
 
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
     const ojtSheet = getSheet(SHEET_NAMES.OJT_TASKS);
-    const ojtCols  = _colMap(ojtSheet); // 只讀特定一列（非整表），維持單獨查欄位
-    const row      = ojtSheet.getRange(rowNumber, 1, 1, ojtSheet.getLastColumn()).getValues()[0];
+    const { cols: ojtCols, rows: ojtRows } = _readSheet(ojtSheet);
 
-    ojtSheet.getRange(rowNumber, ojtCols.Status + 1).setValue(newStatus);
+    // 用 taskId 定位，不信任前端傳來的 rowNumber（列號會因為插入/刪除列而位移，
+    // 或被竄改成別人的作業）。rowNumber 只當找不到 taskId 時的相容退路。
+    let targetIdx = -1;
+    if (taskId) {
+      for (let i = 1; i < ojtRows.length; i++) {
+        if (String(ojtRows[i][ojtCols.TaskId]).trim() === String(taskId).trim()) {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx === -1) return { status: 'error', message: '找不到這筆作業（可能已被處理）' };
+    } else if (rowNumber && rowNumber >= 2 && rowNumber <= ojtRows.length) {
+      targetIdx = rowNumber - 1;
+    } else {
+      return { status: 'error', message: '缺少 taskId' };
+    }
+
+    const row      = ojtRows[targetIdx];
+    const targetRow = targetIdx + 1; // 1-indexed 供 getRange 使用
+    const userId   = String(row[ojtCols.UserId]).trim();
+    const courseId = String(row[ojtCols.CourseId]).trim();
+
+    // 只有還在 pending 的作業可以審核，避免重複核准或覆蓋已審結果
+    if (String(row[ojtCols.Status]).trim() !== 'pending') {
+      return { status: 'error', message: '這筆作業已經審核過了，請重新整理' };
+    }
+
+    // manager 只能審自己部門的人；admin 不限
+    const { cols: userCols, rows: userRows } = _readSheet(getSheet(SHEET_NAMES.USERS));
+    let reviewerRole = '', reviewerDept = '', targetDept = '';
+    for (let i = 1; i < userRows.length; i++) {
+      const uid = String(userRows[i][userCols.UserId]).trim();
+      if (uid === String(requestUserId).trim()) {
+        reviewerRole = String(userRows[i][userCols.Role] || '').toLowerCase();
+        reviewerDept = String(userRows[i][userCols.Department] || '').trim();
+      }
+      if (uid === userId) {
+        targetDept = String(userRows[i][userCols.Department] || '').trim();
+      }
+    }
+    if (reviewerRole === 'manager' && reviewerDept !== targetDept) {
+      return { status: 'error', message: '只能審核自己部門同仁的作業' };
+    }
+
+    ojtSheet.getRange(targetRow, ojtCols.Status + 1).setValue(newStatus);
 
     if (newStatus === 'approved') {
-      ojtSheet.getRange(rowNumber, ojtCols.ApprovedAt + 1).setValue(new Date());
-
-      const userId   = String(row[ojtCols.UserId]).trim();
-      const courseId = String(row[ojtCols.CourseId]).trim();
+      ojtSheet.getRange(targetRow, ojtCols.ApprovedAt + 1).setValue(new Date());
 
       // Progress sheet：新增完課紀錄
       const progressSheet = getSheet(SHEET_NAMES.PROGRESS);
@@ -683,37 +954,12 @@ function reviewOJTTask({ rowNumber, newStatus, requestUserId, sessionToken }) {
         }));
       }
 
-      // UserProgress：加入 completedCourses + earnedBadges
-      const courseSheet = getSheet(SHEET_NAMES.COURSES);
-      const { cols: courseCols, rows: courseRows } = _readSheet(courseSheet);
-      let badges = [];
-      for (let i = 2; i < courseRows.length; i++) {
-        if (String(courseRows[i][courseCols.CourseId]).trim() === courseId) {
-          badges = courseRows[i][courseCols.Badges]
-            ? String(courseRows[i][courseCols.Badges]).split(',').map(b => b.trim())
-            : [];
-          break;
-        }
-      }
+      // 該課程的徽章（從快取的課程目錄拿，不用整表讀 Courses）
+      const course = _getCourseCatalog().filter(c => c.id === courseId)[0];
+      const badges = course ? course.badges : [];
 
-      const upSheet = getSheet(SHEET_NAMES.USER_PROGRESS);
-      const { cols: upCols, rows: upRows } = _readSheet(upSheet);
-      for (let i = 1; i < upRows.length; i++) {
-        if (String(upRows[i][upCols.UserId]).trim() !== userId) continue;
-
-        let completed = safeParseJSON(upRows[i][upCols.CompletedCourses], []);
-        let earned    = safeParseJSON(upRows[i][upCols.EarnedBadges], []);
-
-        if (!completed.includes(courseId)) {
-          completed.push(courseId);
-          upSheet.getRange(i + 1, upCols.CompletedCourses + 1).setValue(JSON.stringify(completed));
-        }
-        if (badges.length > 0) {
-          const merged = [...new Set([...earned, ...badges])];
-          upSheet.getRange(i + 1, upCols.EarnedBadges + 1).setValue(JSON.stringify(merged));
-        }
-        break;
-      }
+      // 彙總表一律走共用的 merge，不自己讀寫（避免又出現覆寫問題）
+      _mergeUserProgress(userId, { addCourseIds: [courseId], addBadges: badges });
     }
 
     return { success: true, status: 'success' };
@@ -788,6 +1034,7 @@ function generateAiContent({ courseId, userId, sessionToken }) {
 
     courseSheet.getRange(targetRow, cols.AiSummary + 1).setValue(JSON.stringify(result.summary || []));
     courseSheet.getRange(targetRow, cols.AiQuiz + 1).setValue(JSON.stringify(result.quiz || []));
+    _invalidateCourseCache(); // hasQuiz/hasSummary 旗標變了，快取要失效
     return { status: 'success', success: true };
 
   } catch (err) {
@@ -919,6 +1166,7 @@ function batchGenerateAllAiContent() {
     }
   }
 
+  _invalidateCourseCache(); // 課程內容有變，清掉目錄快取
   Logger.log(`\n批次完成，共處理 ${processed} 門課程。`);
 }
 
@@ -1361,6 +1609,7 @@ function fixMaterialUrls() {
     }
   }
 
+  _invalidateCourseCache(); // MaterialUrl 有變，清掉目錄快取
   Logger.log(`\n完成！更新：${updated} 筆 / 未對應：${skipped} 筆`);
 }
 
@@ -1402,9 +1651,9 @@ function getDeptReport({ deptId, requestUserId, sessionToken }) {
     }
   }
 
-  // 取得全域 + 部門必修課
-  const { cols: courseCols, rows: courseRows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
-  const { cols: dmCols,     rows: dmRows }     = _readSheet(getSheet(SHEET_NAMES.DEPT_MANDATORY));
+  // 取得全域 + 部門必修課（課程用快取目錄，不整表讀 Courses）
+  const catalog = _getCourseCatalog();
+  const { cols: dmCols, rows: dmRows } = _readSheet(getSheet(SHEET_NAMES.DEPT_MANDATORY));
 
   const deptMandatorySet = new Set();
   for (let i = 1; i < dmRows.length; i++) {
@@ -1413,18 +1662,10 @@ function getDeptReport({ deptId, requestUserId, sessionToken }) {
     }
   }
 
-  const allCourses = [];
-  const mandatoryCourses = [];
-  for (let i = 2; i < courseRows.length; i++) {
-    const r = courseRows[i];
-    if (!r[courseCols.CourseId]) continue;
-    const courseId = String(r[courseCols.CourseId]).trim();
-    const title    = r[courseCols.Title];
-    allCourses.push({ courseId, title });
-    if (r[courseCols.IsMandatory] === true || r[courseCols.IsMandatory] === 'TRUE' || deptMandatorySet.has(courseId)) {
-      mandatoryCourses.push({ courseId, title });
-    }
-  }
+  const allCourses       = catalog.map(c => ({ courseId: c.id, title: c.title }));
+  const mandatoryCourses = catalog
+    .filter(c => c.globalMandatory || deptMandatorySet.has(c.id))
+    .map(c => ({ courseId: c.id, title: c.title }));
 
   // 建立每位員工的完課 Set
   const { cols: progressCols, rows: progressRows } = _readSheet(getSheet(SHEET_NAMES.PROGRESS));

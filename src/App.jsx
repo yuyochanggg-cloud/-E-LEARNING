@@ -219,44 +219,38 @@ export default function App() {
   const fetchDashboardData = async (validUserId) => {
     try {
       setIsLoading(true);
-      
-      const [coursesRes, progressRes] = await Promise.all([
-        gasClient.securePost('getCourses', { userId: validUserId }),
-        gasClient.securePost('getProgress', { userId: validUserId })
-      ]);
 
-      // 🔐 session 過期/驗證失敗：清掉登入狀態並導回登入頁，不要靜默顯示空清單
-      if (coursesRes && coursesRes.status === 'error') {
-        localStorage.removeItem('cloud_academy_user');
-        localStorage.removeItem('cloud_academy_token');
-        showToast(coursesRes.message || '登入已逾期，請重新登入', 'error');
-        window.location.reload();
-        return;
+      // 一次呼叫拿齊課程清單與進度（原本分兩次，各付一趟 GAS 冷啟＋往返）
+      const res = await gasClient.securePost('bootstrap', { userId: validUserId });
+
+      if (res && res.status === 'error') {
+        // 只有「登入逾期／身分驗證失敗」才強制登出，其他錯誤保留登入狀態
+        // （否則任何後端暫時性錯誤都會把使用者踢出去）
+        const msg = String(res.message || '');
+        if (msg.indexOf('逾期') >= 0 || msg.indexOf('身分驗證') >= 0) {
+          localStorage.removeItem('cloud_academy_user');
+          localStorage.removeItem('cloud_academy_token');
+          showToast(msg || '登入已逾期，請重新登入', 'error');
+          window.location.reload();
+          return;
+        }
+        showToast('載入失敗：' + msg, 'error');
+        return; // 保留現有畫面資料，不要用空值覆蓋
       }
 
-      // 🛡️ 終極防護網：不管後端傳什麼鬼東西來，我們都確保它變成陣列
-      let courses = [];
-      if (Array.isArray(coursesRes)) {
-        courses = coursesRes;
-      } else if (coursesRes && Array.isArray(coursesRes.data)) {
-        courses = coursesRes.data;
-      } else if (coursesRes && Array.isArray(coursesRes.courses)) {
-        courses = coursesRes.courses;
-      } else {
-        console.warn("⚠️ 警告：後端回傳的課程資料格式不正確", coursesRes);
-      }
-      
-      setCoursesData(courses); // 確保存進去的 100% 是陣列
+      const courses = Array.isArray(res?.courses) ? res.courses : [];
+      setCoursesData(courses);
 
-      // 處理進度資料
-      if (progressRes && progressRes.data) {
-        setProgressData(progressRes.data); 
+      // 只有真的拿到進度才覆寫本地狀態。拿不到時保留現值，
+      // 避免「讀取失敗 → 本地變空 → 下一次寫入把使用者歷史清掉」
+      if (res?.progress) {
+        setProgressData(res.progress);
       }
-      
+
       // ✨ 深度連結與狀態同步
       const params = new URLSearchParams(window.location.search);
       const courseIdFromUrl = params.get('courseId');
-      
+
       if (courseIdFromUrl && courses.length > 0) {
         const target = courses.find(c => String(c.id || c.CourseId) === String(courseIdFromUrl));
         if (target) {
@@ -269,6 +263,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("載入失敗:", error);
+      showToast('載入失敗，請檢查網路後重新整理', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -290,8 +285,10 @@ const handleCourseComplete = async (badges) => {
     // ✨ 判斷這是不是實戰任務 (OJT)
     const isOJT = String(selectedCourse.category || '').trim() === '實戰解鎖' || selectedCourse.isOJT === true;
 
-    // --- 動作 1：寫入單堂課程記錄 ---
-    // 這裡我們還是要傳，因為要記錄測驗成績 100 分
+    // 完課紀錄與彙總表（完課清單／徽章）現在都由後端 completeCourse 一次處理完，
+    // 前端不再傳整包 progress 快照回去覆寫——那會抹掉主管剛核准的完課或
+    // 另一個分頁剛寫入的徽章（last-write-wins）。
+    // OJT 課程後端會自己判斷不發徽章，等 reviewOJTTask 核准才寫入。
     const res = await gasClient.securePost('completeCourse', {
       userId: uId,
       courseId: cId,
@@ -300,36 +297,8 @@ const handleCourseComplete = async (badges) => {
     });
 
     if (res.success || res.status === 'success') {
-      
-      // --- 動作 2：同步更新「個人總成就表」(攔截點在此！) ---
-      let updatedCompletedCourses = [...(progressData.completedCourses || [])];
-      let updatedBadges = [...(progressData.earnedBadges || [])];
+      if (res.data) setProgressData(res.data); // 用後端 merge 後的實際結果更新本地
 
-      if (isOJT) {
-        // 🚩 攔截！如果是 OJT：
-        // 我們「不」把 cId 加進已完成清單
-        // 我們「不」把 badges 加進已獲得徽章
-        console.log("偵測為 OJT 課程，暫緩發放徽章，等待主管審核中...");
-      } else {
-        // ✅ 一般課程：正常發放
-        updatedCompletedCourses = [...new Set([...updatedCompletedCourses, cId])];
-        updatedBadges = [...new Set([...updatedBadges, ...(badges || [])])];
-      }
-
-      const newProgressData = {
-        ...progressData,
-        completedCourses: updatedCompletedCourses,
-        earnedBadges: updatedBadges
-      };
-
-      // 呼叫 updateProgress API
-      // 如果是 OJT，這一步傳回去的資料跟舊的一樣（除了可能更新時間），所以徽章不會被增加
-      await gasClient.securePost('updateProgress', {
-        userId: uId,
-        progressData: newProgressData
-      });
-
-      // --- 動作 3：根據課程類型給予不同提示 ---
       if (isOJT) {
         showToast('測驗關卡通過！請完成實戰成果上傳，待主管核准後徽章才會解鎖。', 'warning');
       } else {
@@ -337,8 +306,8 @@ const handleCourseComplete = async (badges) => {
       }
 
       // 重整畫面資料
-      await fetchDashboardData(uId); 
-      
+      await fetchDashboardData(uId);
+
     } else {
       throw new Error(res.message || "伺服器存檔失敗");
     }
@@ -473,19 +442,15 @@ const handleCourseComplete = async (badges) => {
     window.location.reload();
   };
 
-// ⏱️ 處理學習進度與時數更新 (修復全白畫面 Bug)
+// ⏱️ 學習時數累加：只送 delta，由後端 merge（前端不再送整包快照）
   const handleUpdateProgress = async (courseId, spentMinutes) => {
     if (!spentMinutes || spentMinutes <= 0 || !userProfile) return;
     try {
       const res = await gasClient.securePost('updateProgress', {
         userId: userProfile.userId || userProfile.UserId,
-        progressData: {
-          completedCourses: progressData?.completedCourses || [],
-          earnedBadges:     progressData?.earnedBadges     || [],
-          totalLearningMinutes: (progressData?.totalLearningMinutes || 0) + spentMinutes
-        }
+        addMinutes: spentMinutes
       });
-      // 用後端寫入後的實際值更新本地 state，避免同一次登入內連看多門課時互相覆蓋累計時數
+      // 用後端 merge 後的實際值更新本地 state
       if (res.status === 'success' && res.data) {
         setProgressData(res.data);
       }
@@ -517,13 +482,14 @@ const handleCourseComplete = async (badges) => {
 
   // 監聽瀏覽器上一頁/下一頁
   useEffect(() => {
-    const handlePopState = () => {
+    const handlePopState = (event) => {
       const params = new URLSearchParams(window.location.search);
       const courseId = params.get('courseId');
 
       if (!courseId) {
         setSelectedCourse(null);
-        setCurrentView('library'); 
+        // 回到當初推入歷程的那個頁面，不要一律導到 library
+        setCurrentView(event?.state?.view || 'dashboard');
       } else if (coursesData.length > 0) {
         const target = coursesData.find(c => String(c.id || c.CourseId) === String(courseId));
         if (target) {
@@ -541,12 +507,13 @@ const handleCourseComplete = async (badges) => {
     setSelectedCourse(course);
     setCurrentView(view);
 
-    if (view === 'course' && course) { 
+    if (view === 'course' && course) {
       const id = course.id || course.CourseId;
-      window.history.pushState({ courseId: id }, '', `?courseId=${id}`);
-      window.scrollTo(0, 0); 
+      window.history.pushState({ courseId: id, view }, '', `?courseId=${id}`);
+      window.scrollTo(0, 0);
     } else {
-      window.history.pushState({}, '', window.location.pathname);
+      // 把 view 記進 history state，上一頁才能回到正確的頁面
+      window.history.pushState({ view }, '', window.location.pathname);
     }
   };
 
@@ -929,7 +896,16 @@ function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
               <button 
                 onClick={() => {
                   // 自動找第一堂還沒過的必修，都過了就找第一堂選修
-                  const nextCourse = mandatoryCourses.find(c => !c.isCompleted) || electiveCourses[0];
+                  // 兩者都沒有時不能傳 undefined——那會讓畫面切到課程頁但
+                  // selectedCourse 是 null，整片內容區空白
+                  const nextCourse = mandatoryCourses.find(c => !c.isCompleted)
+                    || electiveCourses.find(c => !c.isCompleted)
+                    || electiveCourses[0]
+                    || courses[0];
+                  if (!nextCourse) {
+                    showToast('目前沒有可開始的課程', 'warning');
+                    return;
+                  }
                   onStartCourse(nextCourse);
                 }}
                 className="bg-white text-blue-800 font-bold px-8 py-3.5 rounded-xl shadow-lg hover:bg-slate-50 transition-all flex items-center"
@@ -1068,12 +1044,14 @@ function LibraryView({ courses, progress, onStartCourse }) {
             {/* 🃏 課程卡片網格 (確保呼叫你原本的 CourseCard) */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
               {catCourses.map(course => (
-                <CourseCard 
-                  key={course.id} 
-                  course={course} 
-                  // 🛡️ 安全檢查：確保 progress.completedCourses 存在才執行 includes
-                  isCompleted={progress?.completedCourses?.includes(course.id) || false} 
-                  onClick={() => onStartCourse(course)} 
+                <CourseCard
+                  key={course.id}
+                  course={course}
+                  // 統一用後端算好的 course.isCompleted（已含 OJT 核准），
+                  // 不要改用 progress.completedCourses 判斷——那份彙總是快取，
+                  // OJT 核准後若沒同步就會出現「其他頁顯示完成、資源庫不亮」
+                  isCompleted={course.isCompleted === true}
+                  onClick={() => onStartCourse(course)}
                 />
               ))}
             </div>
@@ -1337,6 +1315,9 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
       });
       if (res.success || res.status === 'success') {
         setTasks(res.tasks || res.data?.tasks || []);
+      } else {
+        // 不能靜默忽略——session 過期時會顯示成「目前沒有待審核作業」
+        showToast(res.message || '待審清單載入失敗', 'error');
       }
     } finally { setIsLoading(false); }
   }
@@ -1347,6 +1328,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
     try {
       const res = await gasClient.securePost('getDeptReport', { deptId: selectedDept, requestUserId: userId });
       if (res.status === 'success') setDeptReport(res.data);
+      else showToast(res.message || '部門報表載入失敗', 'error');
     } finally { setIsLoading(false); }
   }
 
@@ -1356,20 +1338,37 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
     try {
       const res = await gasClient.securePost('getDeptMandatory', { deptId: selectedDept, requestUserId: userId });
       if (res.status === 'success') setDeptMandatory(new Set(res.courseIds || []));
+      else showToast(res.message || '必修課設定載入失敗', 'error');
     } finally { setIsLoading(false); }
   }
 
-  async function handleReview(rowNumber, newStatus) {
+  async function handleReview(task, newStatus) {
     if (!window.confirm(newStatus === 'approved' ? '確定核准？' : '確定退回？')) return;
-    const res = await gasClient.securePost('reviewOJTTask', { rowNumber, newStatus, requestUserId: userId });
+    // 傳 taskId 讓後端定位，不靠 rowNumber（列號會因插入/刪除列而位移）
+    const res = await gasClient.securePost('reviewOJTTask', {
+      taskId: task.taskId,
+      rowNumber: task.rowNumber,
+      newStatus,
+      requestUserId: userId
+    });
     if (res.success) {
       showToast(newStatus === 'approved' ? '已核准！' : '已退回！', newStatus === 'approved' ? 'success' : 'info');
       fetchPendingTasks();
+    } else {
+      showToast(res.message || '審核失敗', 'error');
+      fetchPendingTasks(); // 可能是別人已經審過了，重抓最新狀態
     }
   }
 
   async function handleToggleMandatory(courseId, currentlyOn) {
-    await gasClient.securePost('setDeptMandatory', { deptId: selectedDept, courseId, isAdd: !currentlyOn, requestUserId: userId });
+    // 先確認後端寫入成功才更新 UI，否則寫入失敗畫面仍會顯示已開啟
+    const res = await gasClient.securePost('setDeptMandatory', {
+      deptId: selectedDept, courseId, isAdd: !currentlyOn, requestUserId: userId
+    });
+    if (res.status !== 'success') {
+      showToast(res.message || '設定失敗，請重試', 'error');
+      return;
+    }
     setDeptMandatory(prev => {
       const next = new Set(prev);
       currentlyOn ? next.delete(courseId) : next.add(courseId);
@@ -1455,9 +1454,9 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
                   </a>
                 </div>
                 <div className="flex md:flex-col gap-2 min-w-[110px]">
-                  <button onClick={() => handleReview(task.rowNumber, 'approved')}
+                  <button onClick={() => handleReview(task, 'approved')}
                     className="flex-1 py-2 bg-emerald-500 text-white text-sm font-bold rounded-lg hover:bg-emerald-600">✅ 核准</button>
-                  <button onClick={() => handleReview(task.rowNumber, 'rejected')}
+                  <button onClick={() => handleReview(task, 'rejected')}
                     className="flex-1 py-2 border-2 border-slate-200 text-slate-600 text-sm font-bold rounded-lg hover:bg-red-50 hover:text-red-600 hover:border-red-200">❌ 退回</button>
                 </div>
               </div>
@@ -1561,9 +1560,12 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
                 <p className="text-slate-400 text-center py-8 text-sm">無課程可設定</p>
               )}
               {(courses || []).map(c => {
-                const isGlobalMandatory = c.isMandatory && !deptMandatory.has(c.id || c.CourseId);
-                const isDeptMandatory   = deptMandatory.has(c.id || c.CourseId);
                 const courseId = c.id || c.CourseId;
+                const isDeptMandatory = deptMandatory.has(courseId);
+                // 用後端獨立提供的 isGlobalMandatory，不要從 c.isMandatory 反推——
+                // 那個旗標已經疊加了「檢視者自己部門」的必修，admin 看別部門時
+                // 會把自己部門的加選誤判成全域必修、鎖住無法切換
+                const isGlobalMandatory = c.isGlobalMandatory === true;
                 return (
                   <div key={courseId} className="px-5 py-3.5 flex items-center justify-between gap-4">
                     <div>
@@ -1611,21 +1613,49 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     window.scrollTo(0, 0);
   }, []);
 
+  // 2.5 課程內容（摘要＋題目）改成點開課程時才拉。
+  // 課程清單不再夾帶這兩項，首屏才不用付整表序列化的代價。
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+
+  const loadDetail = React.useCallback(async () => {
+    if (!course.id || !userId) return;
+    setDetailLoading(true);
+    try {
+      const res = await gasClient.securePost('getCourseDetail', {
+        courseId: course.id,
+        userId
+      });
+      setDetail(res?.status === 'success' ? res.data : { AiSummary: '', quiz: [] });
+    } catch (e) {
+      console.error('課程內容載入失敗', e);
+      setDetail({ AiSummary: '', quiz: [] });
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [course.id, userId]);
+
+  useEffect(() => { loadDetail(); }, [loadDetail]);
+
   // 3. ✨ 隱形碼錶：紀錄學習時間
+  //
+  // 用 ref 存回呼與起算時間，effect 依賴只留 course.id。
+  // 原本依賴 onUpdateProgress（每次 render 都是新函式）與 course.title，
+  // 導致 App 每重繪一次 effect 就重跑、startTime 歸零，時數幾乎永遠寫 0。
+  const onUpdateProgressRef = useRef(onUpdateProgress);
+  useEffect(() => { onUpdateProgressRef.current = onUpdateProgress; }, [onUpdateProgress]);
+
   useEffect(() => {
     const startTime = Date.now();
-    console.log(`⏱️ 碼錶啟動！開始上課：${course.title}`);
+    const courseId  = course.id;
 
     return () => {
-      const endTime = Date.now();
-      const spentMinutes = Math.floor((endTime - startTime) / 60000);
-      console.log(`⏱️ 下課！本次累積時數：${spentMinutes}`);
-
-      if (spentMinutes > 0 && onUpdateProgress) {
-        onUpdateProgress(course.id, spentMinutes);
+      const spentMinutes = Math.floor((Date.now() - startTime) / 60000);
+      if (spentMinutes > 0 && onUpdateProgressRef.current) {
+        onUpdateProgressRef.current(courseId, spentMinutes);
       }
     };
-  }, [course.id, onUpdateProgress, course.title]);
+  }, [course.id]);
 
   // 4. 🪄 網址轉換引擎
   const isDriveUrl = (url) =>
@@ -1656,7 +1686,8 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       const res = await gasClient.securePost('generateAiContent', { courseId, userId });
       if (res.success || res.status === 'success') {
         showToast('AI 助教已完成重點摘要與測驗題目！', 'success');
-        if (onRefresh) onRefresh();
+        await loadDetail();          // 重新拉摘要與題目
+        if (onRefresh) onRefresh();  // 更新課程清單的 hasQuiz/hasSummary 旗標
       } else {
         showToast(res.message || 'AI 助教產出失敗，請稍後再試。', 'error');
       }
@@ -1820,7 +1851,11 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       {/* ✨ AI 智慧摘要區塊 */}
 <div className="mb-10">
   {/* 💡 強化判定：確保內容不是空的，也不是空的 JSON 陣列 */}
-  {course.AiSummary && course.AiSummary.trim() !== "" && course.AiSummary !== "[]" ? (
+  {detailLoading ? (
+    <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold animate-pulse">
+      載入課程內容中...
+    </div>
+  ) : detail?.AiSummary && String(detail.AiSummary).trim() !== "" && detail.AiSummary !== "[]" ? (
     <div className="p-6 bg-gradient-to-br from-indigo-50 to-white rounded-3xl border border-indigo-100 shadow-sm animate-in fade-in duration-500">
       <h3 className="flex items-center text-indigo-900 font-bold mb-4 text-lg">
         <Sparkles className="w-5 h-5 mr-2 text-indigo-500" />
@@ -1829,7 +1864,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
       <div className="grid grid-cols-1 gap-3">
         {(() => {
           try {
-            const points = JSON.parse(course.AiSummary);
+            const points = JSON.parse(detail.AiSummary);
             // 確保解析出來的是有內容的陣列
             if (Array.isArray(points) && points.length > 0) {
               return points.map((point, index) => (
@@ -1844,7 +1879,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
             return <p className="text-slate-400 italic text-sm">摘要內容格式有誤</p>;
           } catch (e) {
             // 如果不是 JSON，則嘗試直接顯示文字內容
-            return <p className="text-slate-700 p-2">{course.AiSummary}</p>;
+            return <p className="text-slate-700 p-2">{detail.AiSummary}</p>;
           }
         })()}
       </div>
@@ -1912,6 +1947,8 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
                   {/* 如果你的題目長在這裡，那就絕對不能在下面塞「上傳按鈕」的程式碼 */}
                   <QuizSection
                     course={course}
+                    quiz={detail?.quiz}
+                    isLoading={detailLoading}
                     isAlreadyPassed={isCompleted}
                     badges={safeCourse.badges}
                     userId={userId}
@@ -1960,117 +1997,15 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
   );
 }
 
-function AdvancedCloudAudioPlayer({ course }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [currentTimeDisplay, setCurrentTimeDisplay] = useState('00:00');
-  const [showNodeQuiz, setShowNodeQuiz] = useState(false); // 節點測驗模擬
-  const catConfig = categoriesConfig[course.category] || categoriesConfig['初心補給站'];
-  
-  const [sourceType, setSourceType] = useState('demo'); 
-  const audioRef = useRef(null);
-
-  const formatTime = (seconds) => {
-    if (isNaN(seconds)) return '00:00';
-    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  const togglePlay = () => {
-    setIsPlaying(!isPlaying);
-    setShowNodeQuiz(false);
-  };
-
-  const handleProgressClick = (e) => {
-    if (sourceType === 'demo') return;
-    const bar = e.currentTarget;
-    const rect = bar.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const newProgress = clickX / rect.width;
-    setProgress(newProgress * 100);
-  };
-
-  // 模擬播放進度與節點測驗 (微學習機制)
-  useEffect(() => {
-    let interval;
-    if (isPlaying && sourceType === 'demo') {
-      interval = setInterval(() => {
-        setProgress(p => {
-          // 模擬在 30% 處跳出節點提取測驗 (防呆)
-          if (p > 30 && p < 31 && !showNodeQuiz) {
-            setIsPlaying(false);
-            setShowNodeQuiz(true);
-          }
-          if (p >= 100) {
-            setIsPlaying(false);
-            return 0;
-          }
-          return p + 0.1;
-        });
-      }, 1000); // 為了展示加速，實際會更慢
-    }
-    return () => clearInterval(interval);
-  }, [isPlaying, sourceType, showNodeQuiz]);
-
-  return (
-    <div className={`bg-slate-900 rounded-2xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden border-2 ${catConfig.border}`}>
-      <div className={`absolute top-0 right-0 w-96 h-96 opacity-10 rounded-full blur-3xl translate-x-1/3 -translate-y-1/3 pointer-events-none ${catConfig.bg.replace('100', '500')}`}></div>
-      
-      {/* 節點測驗彈出層 (微學習提取練習) */}
-      {showNodeQuiz && (
-        <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center animate-fade-in p-6">
-          <Target className="w-12 h-12 text-amber-400 mb-4 animate-bounce" />
-          <h3 className="text-xl font-bold mb-2">提取練習時間！</h3>
-          <p className="text-slate-300 text-sm mb-6 max-w-md text-center">為了加深您的神經連結，請回憶剛剛聽到的核心概念：<br/>「在處理客訴時，最重要的第一步是什麼？」</p>
-          <button onClick={() => { setShowNodeQuiz(false); setIsPlaying(true); }} className="bg-blue-600 text-white px-6 py-2 rounded-xl font-bold hover:bg-blue-500">
-            繼續播放
-          </button>
-        </div>
-      )}
-
-      <div className="relative z-10 flex flex-col md:flex-row items-center gap-6 md:gap-8">
-        <button onClick={togglePlay} className={`w-16 h-16 md:w-20 md:h-20 flex-shrink-0 text-white rounded-full flex items-center justify-center hover:scale-105 transition-all shadow-lg border-4 border-slate-800 focus:outline-none ${catConfig.color.replace('text', 'bg').replace('500', '600')}`}>
-          {isPlaying ? <Pause className="w-8 h-8 md:w-10 md:h-10" /> : <Play className="w-8 h-8 md:w-10 md:h-10 ml-1.5" />}
-        </button>
-
-        <div className="flex-grow w-full">
-          <div className="mb-2">
-            <h2 className="text-xl md:text-2xl font-extrabold truncate pr-4 text-slate-100">{course.title}</h2>
-          </div>
-          <div className="flex items-center space-x-3 mb-5">
-            <span className={`text-xs font-bold px-2 py-1 rounded border flex items-center bg-slate-800 text-slate-300 border-slate-700`}>
-              <Headphones className="w-3 h-3 mr-1"/> 內部串流播放中
-            </span>
-          </div>
-          
-          <div className="group">
-            <div className={`w-full bg-slate-800 rounded-full h-3 mb-2 relative overflow-hidden border border-slate-700 shadow-inner`} onClick={handleProgressClick}>
-              {/* 節點測驗標記 */}
-              <div className="absolute left-[30%] top-0 bottom-0 w-1 bg-amber-400 z-10" title="防呆節點"></div>
-              
-              <div className={`h-full rounded-full transition-all duration-100 ease-linear relative ${catConfig.bg.replace('100', '500')}`} style={{ width: `${progress}%` }}>
-                <div className="absolute right-0 top-0 bottom-0 w-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity transform scale-150"></div>
-              </div>
-            </div>
-            <div className="flex justify-between text-xs font-medium text-slate-400 font-mono">
-              <span>{currentTimeDisplay}</span>
-              <span>{course.duration}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function QuizSection({ course, onSubmit, isAlreadyPassed, badges, userId }) {
+function QuizSection({ course, quiz, isLoading, onSubmit, isAlreadyPassed, badges, userId }) {
   // --- 1. 資料整合層 ---
+  // 題目由 CoursePlayerView 透過 getCourseDetail 取得後傳進來（不再夾在課程清單裡）。
+  // 過濾掉缺 question 或 options 的殘缺題目——AI 產出偶爾會少欄位，
+  // 沒過濾的話 q.options.map 會直接讓整頁白畫面、該課永久打不開。
   const quizData = useMemo(() => {
-    if (Array.isArray(course.quiz) && course.quiz.length > 0) return course.quiz;
-    try { return course.AiQuiz ? JSON.parse(course.AiQuiz) : []; } 
-    catch (e) { console.error("AI 題目解析失敗", e); return []; }
-  }, [course.quiz, course.AiQuiz]);
+    const source = Array.isArray(quiz) ? quiz : [];
+    return source.filter(q => q && q.question && Array.isArray(q.options) && q.options.length > 0);
+  }, [quiz]);
 
   const hasQuiz = quizData.length > 0;
 
@@ -2127,6 +2062,10 @@ function QuizSection({ course, onSubmit, isAlreadyPassed, badges, userId }) {
   const resetQuiz = () => { setAnswers({}); setSubmitted(false); setScore(0); };
 
   // --- 畫面渲染 ---
+  if (isLoading) {
+    return <div className="text-center py-10 text-slate-400 font-bold bg-slate-50 rounded-2xl animate-pulse">載入測驗題目中...</div>;
+  }
+
   if (isAlreadyPassed || (submitted && score === 100)) {
     return (
       <div className="text-center py-12 animate-fade-in bg-emerald-50 rounded-2xl border border-emerald-100 shadow-sm">
