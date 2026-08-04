@@ -56,11 +56,11 @@ function Toast() {
 
 // --- 六大頻道配置 (前台 / 後台 雙軌命名) ---
 const categoriesConfig = {
+  '生存百寶箱': { backend: '流程與行政 SOP', icon: Briefcase, color: 'text-purple-500', bg: 'bg-purple-100', border: 'border-purple-200', radarIndex: 4 },
   '初心補給站': { backend: '組織文化與思維', icon: Sparkles, color: 'text-amber-500', bg: 'bg-amber-100', border: 'border-amber-200', radarIndex: 0 },
   '職人練功坊': { backend: '專業戰技與業務 ROI', icon: TrendingUp, color: 'text-red-500', bg: 'bg-red-100', border: 'border-red-200', radarIndex: 1 },
   '效率外掛區': { backend: 'AI 與未來職能', icon: Rocket, color: 'text-blue-500', bg: 'bg-blue-100', border: 'border-blue-200', radarIndex: 2 },
   '心靈充電站': { backend: '心理資本與韌性', icon: BatteryCharging, color: 'text-emerald-500', bg: 'bg-emerald-100', border: 'border-emerald-200', radarIndex: 3 },
-  '生存百寶箱': { backend: '流程與行政 SOP', icon: Briefcase, color: 'text-purple-500', bg: 'bg-purple-100', border: 'border-purple-200', radarIndex: 4 },
   '領導與溝通': { backend: '領導與群體動力', icon: Users, color: 'text-indigo-500', bg: 'bg-indigo-100', border: 'border-indigo-200', radarIndex: 5 }
 };
 
@@ -344,7 +344,7 @@ const handleCourseComplete = async (badges) => {
     }
   } catch (error) {
     console.error("存檔發生錯誤:", error);
-    showToast('存檔失敗，請聯繫管理員。', 'error');
+    showToast('存檔失敗：' + (error.message || '未知錯誤') + '（請截圖回報）', 'error');
   } finally {
     setIsLoading(false);
   }
