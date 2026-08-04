@@ -224,15 +224,18 @@ function _isValidEmail(v) {
 }
 
 // ============================================================
-// 密碼雜湊（SHA-256 + 固定 salt）
+// 密碼比對
 //
-// 為什麼是漸進式而非一次性遷移：Sheet 裡原本存明碼，若直接改成只認 hash
-// 就必須先跑批次轉換，轉換出錯（欄位對不上、跑一半 timeout）會把 150 人
-// 全部鎖在門外。改成「兩種都認得，登入成功時順手把明碼換成 hash」，
-// 不需停機、不需批次作業，用久了自然全部升級完。
+// 【目前設計：密碼以明碼存放，這是使用者刻意選擇的取捨】
+// 原因：HR 需要能直接在 Sheet 上查看員工密碼以協助忘記密碼的同仁。
+// 代價：任何能開啟這份 Sheet 的人都看得到全公司密碼，請把 Sheet 的
+//      共用權限控制在最少人。
 //
-// salt 存在 Script Properties（PASSWORD_SALT），沒設定就用預設值——
-// 預設值只是讓功能能跑，正式環境請去指令碼屬性設一組自己的隨機字串。
+// 下面的 hash 相關函式「不會主動把密碼轉成 hash」，只保留驗證能力：
+// 萬一 Sheet 裡有任何一筆密碼曾經被轉成 hash（例如測試期間），
+// 那位同仁還是能正常登入，不會被鎖在門外。
+// 之後若改變決定要改存 hash，把 verifyLogin 登入成功後與 changePassword
+// 的寫入改成 _hashPassword(...) 即可，比對邏輯不用動。
 // ============================================================
 const HASH_PREFIX = 'sha256:';
 
@@ -318,16 +321,6 @@ function verifyLogin({ userId, password }) {
     }
     _clearLoginFailures(uid);
 
-    // 舊的明碼密碼在登入成功當下順便升級成 hash（漸進遷移，不需停機
-    // 也不需批次改資料，避免一次性遷移出錯把全員鎖在外面）
-    if (!_isHashedPassword(stored)) {
-      try {
-        sheet.getRange(i + 1, cols.Password + 1).setValue(_hashPassword(stored));
-      } catch (e) {
-        Logger.log('密碼 hash 升級失敗（不影響本次登入）：' + e.toString());
-      }
-    }
-
     // 更新最後登入時間
     sheet.getRange(i + 1, cols.LastLogin + 1).setValue(new Date());
 
@@ -378,7 +371,7 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
     const lock = LockService.getScriptLock();
     lock.waitLock(5000);
     try {
-      sheet.getRange(i + 1, cols.Password + 1).setValue(_hashPassword(newPassword));
+      sheet.getRange(i + 1, cols.Password + 1).setValue(newPassword);
       sheet.getRange(i + 1, cols.IsFirstLogin + 1).setValue(false);
       if (notifyEmail) {
         sheet.getRange(i + 1, cols.Email + 1).setValue(String(notifyEmail).trim());
