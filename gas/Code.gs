@@ -104,6 +104,7 @@ function safeParseJSON(str, fallback) {
 // ------------------------------------------------------------
 // 欄位名稱對照表：讀取 Sheet 第一列標題文字，回傳 { 標題文字: 0-based 欄位位置 }
 // 之後所有讀寫都用 cols.欄位名稱，不用寫死的數字，插入新欄不會讓舊邏輯錯位。
+// 只需要欄位對照、不需要整表資料時用這個（例如只讀特定一列）。
 // ------------------------------------------------------------
 function _colMap(sheet) {
   const lastCol = sheet.getLastColumn();
@@ -111,6 +112,20 @@ function _colMap(sheet) {
   const map = {};
   header.forEach((h, i) => { if (h) map[String(h).trim()] = i; });
   return map;
+}
+
+// ------------------------------------------------------------
+// 效能優化：需要「欄位對照表」又要「整表資料」時，兩者都能從同一次
+// getDataRange() 拿到（標題列就是 rows[0]），不用像 _colMap 那樣另外
+// 多打一次 Sheets API。所有「讀整表」的函式都應該用這個，不要各自呼叫
+// _colMap(sheet) 再呼叫一次 sheet.getDataRange().getValues()——那樣同一
+//張表會被讀兩次，每個請求會多出等同於表數的 API 往返時間。
+// ------------------------------------------------------------
+function _readSheet(sheet) {
+  const rows = sheet.getDataRange().getValues();
+  const cols = {};
+  (rows[0] || []).forEach((h, i) => { if (h) cols[String(h).trim()] = i; });
+  return { cols, rows };
 }
 
 // ------------------------------------------------------------
@@ -146,9 +161,7 @@ function _requireSession(sessionToken, expectedUserId) {
 }
 
 function _getRole(userId) {
-  const sheet = getSheet(SHEET_NAMES.USERS);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.USERS));
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][cols.UserId]).trim() === String(userId).trim()) {
       return String(rows[i][cols.Role] || '').toLowerCase();
@@ -177,8 +190,7 @@ function _isValidEmail(v) {
 
 function verifyLogin({ userId, password }) {
   const sheet = getSheet(SHEET_NAMES.USERS);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(sheet);
 
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -224,8 +236,7 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
   }
 
   const sheet = getSheet(SHEET_NAMES.USERS);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(sheet);
 
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -269,8 +280,7 @@ function updateNotifyEmail({ userId, email, sessionToken }) {
   }
 
   const sheet = getSheet(SHEET_NAMES.USERS);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(sheet);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(5000);
@@ -296,23 +306,11 @@ function getCourses({ userId, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  const courseSheet   = getSheet(SHEET_NAMES.COURSES);
-  const ojtSheet      = getSheet(SHEET_NAMES.OJT_TASKS);
-  const progressSheet = getSheet(SHEET_NAMES.PROGRESS);
-  const userSheet     = getSheet(SHEET_NAMES.USERS);
-  const dmSheet       = getSheet(SHEET_NAMES.DEPT_MANDATORY);
-
-  const courseCols   = _colMap(courseSheet);
-  const ojtCols      = _colMap(ojtSheet);
-  const progressCols = _colMap(progressSheet);
-  const userCols     = _colMap(userSheet);
-  const dmCols       = _colMap(dmSheet);
-
-  const courseRows   = courseSheet.getDataRange().getValues();
-  const ojtRows      = ojtSheet.getDataRange().getValues();
-  const progressRows = progressSheet.getDataRange().getValues();
-  const userRows     = userSheet.getDataRange().getValues();
-  const dmRows       = dmSheet.getDataRange().getValues();
+  const { cols: courseCols,   rows: courseRows }   = _readSheet(getSheet(SHEET_NAMES.COURSES));
+  const { cols: ojtCols,      rows: ojtRows }      = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
+  const { cols: progressCols, rows: progressRows } = _readSheet(getSheet(SHEET_NAMES.PROGRESS));
+  const { cols: userCols,     rows: userRows }     = _readSheet(getSheet(SHEET_NAMES.USERS));
+  const { cols: dmCols,       rows: dmRows }       = _readSheet(getSheet(SHEET_NAMES.DEPT_MANDATORY));
 
   // 取得使用者部門
   let userDept = '';
@@ -397,9 +395,7 @@ function getProgress({ userId, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  const sheet = getSheet(SHEET_NAMES.USER_PROGRESS);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.USER_PROGRESS));
 
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][cols.UserId]).trim() !== String(userId).trim()) continue;
@@ -435,8 +431,7 @@ function completeCourse({ userId, courseId, badges, isOJT, sessionToken }) {
     lock.waitLock(10000);
     try {
       const sheet = getSheet(SHEET_NAMES.PROGRESS);
-      const cols  = _colMap(sheet);
-      const rows  = sheet.getDataRange().getValues();
+      const { cols, rows } = _readSheet(sheet);
 
       for (let i = 1; i < rows.length; i++) {
         if (String(rows[i][cols.UserId]).trim() === String(userId).trim() &&
@@ -472,8 +467,7 @@ function updateProgress({ userId, progressData, sessionToken }) {
   lock.waitLock(10000);
   try {
     const sheet = getSheet(SHEET_NAMES.USER_PROGRESS);
-    const cols  = _colMap(sheet);
-    const rows  = sheet.getDataRange().getValues();
+    const { cols, rows } = _readSheet(sheet);
 
     const completedJSON = JSON.stringify(progressData.completedCourses || []);
     const badgesJSON    = JSON.stringify(progressData.earnedBadges || []);
@@ -522,7 +516,7 @@ function submitOJT({ userId, courseId, submitType, fileName, mimeType, base64Dat
   }
 
   const sheet  = getSheet(SHEET_NAMES.OJT_TASKS);
-  const cols   = _colMap(sheet);
+  const cols   = _colMap(sheet); // 純寫入（appendRow），不需要整表資料，維持單獨查欄位
   const taskId = `OJT-${courseId}-${userId}-${Date.now()}`;
   let fileUrl  = '';
 
@@ -569,17 +563,9 @@ function getPendingOJTTasks({ requestUserId, sessionToken } = {}) {
   const err = _requireManagerOrAdmin(sessionToken, requestUserId);
   if (err) return { status: 'error', message: err };
 
-  const ojtSheet    = getSheet(SHEET_NAMES.OJT_TASKS);
-  const userSheet   = getSheet(SHEET_NAMES.USERS);
-  const courseSheet = getSheet(SHEET_NAMES.COURSES);
-
-  const ojtCols    = _colMap(ojtSheet);
-  const userCols   = _colMap(userSheet);
-  const courseCols = _colMap(courseSheet);
-
-  const ojtRows    = ojtSheet.getDataRange().getValues();
-  const userRows   = userSheet.getDataRange().getValues();
-  const courseRows = courseSheet.getDataRange().getValues();
+  const { cols: ojtCols,    rows: ojtRows }    = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
+  const { cols: userCols,   rows: userRows }   = _readSheet(getSheet(SHEET_NAMES.USERS));
+  const { cols: courseCols, rows: courseRows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
 
   // Lookup maps
   const userMap = {};
@@ -631,7 +617,7 @@ function reviewOJTTask({ rowNumber, newStatus, requestUserId, sessionToken }) {
   lock.waitLock(10000);
   try {
     const ojtSheet = getSheet(SHEET_NAMES.OJT_TASKS);
-    const ojtCols  = _colMap(ojtSheet);
+    const ojtCols  = _colMap(ojtSheet); // 只讀特定一列（非整表），維持單獨查欄位
     const row      = ojtSheet.getRange(rowNumber, 1, 1, ojtSheet.getLastColumn()).getValues()[0];
 
     ojtSheet.getRange(rowNumber, ojtCols.Status + 1).setValue(newStatus);
@@ -644,8 +630,7 @@ function reviewOJTTask({ rowNumber, newStatus, requestUserId, sessionToken }) {
 
       // Progress sheet：新增完課紀錄
       const progressSheet = getSheet(SHEET_NAMES.PROGRESS);
-      const progressCols  = _colMap(progressSheet);
-      const progressRows  = progressSheet.getDataRange().getValues();
+      const { cols: progressCols, rows: progressRows } = _readSheet(progressSheet);
       let exists = false;
       for (let i = 1; i < progressRows.length; i++) {
         if (String(progressRows[i][progressCols.UserId]).trim() === userId &&
@@ -661,8 +646,7 @@ function reviewOJTTask({ rowNumber, newStatus, requestUserId, sessionToken }) {
 
       // UserProgress：加入 completedCourses + earnedBadges
       const courseSheet = getSheet(SHEET_NAMES.COURSES);
-      const courseCols   = _colMap(courseSheet);
-      const courseRows   = courseSheet.getDataRange().getValues();
+      const { cols: courseCols, rows: courseRows } = _readSheet(courseSheet);
       let badges = [];
       for (let i = 2; i < courseRows.length; i++) {
         if (String(courseRows[i][courseCols.CourseId]).trim() === courseId) {
@@ -674,8 +658,7 @@ function reviewOJTTask({ rowNumber, newStatus, requestUserId, sessionToken }) {
       }
 
       const upSheet = getSheet(SHEET_NAMES.USER_PROGRESS);
-      const upCols  = _colMap(upSheet);
-      const upRows  = upSheet.getDataRange().getValues();
+      const { cols: upCols, rows: upRows } = _readSheet(upSheet);
       for (let i = 1; i < upRows.length; i++) {
         if (String(upRows[i][upCols.UserId]).trim() !== userId) continue;
 
@@ -717,8 +700,7 @@ function generateAiContent({ courseId, userId, sessionToken }) {
   if (err) return { status: 'error', message: err };
 
   const courseSheet = getSheet(SHEET_NAMES.COURSES);
-  const cols        = _colMap(courseSheet);
-  const rows        = courseSheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(courseSheet);
 
   let targetRow = -1, title = '', category = '', materialType = '', materialUrl = '', materialTextUrl = '', ojtDesc = '', transcript = '', existingSummary = '';
   for (let i = 2; i < rows.length; i++) {
@@ -850,8 +832,7 @@ function _aiFromAudioInline(driveUrl, title, category) {
 // ------------------------------------------------------------
 function batchGenerateAllAiContent() {
   const sheet = getSheet(SHEET_NAMES.COURSES);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(sheet);
 
   let processed = 0;
 
@@ -861,10 +842,10 @@ function batchGenerateAllAiContent() {
     const title           = r[cols.Title];
     const category        = r[cols.Category];
     const matType         = String(r[cols.MaterialType] || '').toLowerCase();
-    const matUrl          = r[cols.MaterialUrl] || '';
+    const matUrl           = r[cols.MaterialUrl] || '';
     const materialTextUrl = r[cols.MaterialTextUrl] || '';
-    const aiSummary       = r[cols.AiSummary];
-    const transcript      = r[cols.Transcript] || '';
+    const aiSummary        = r[cols.AiSummary];
+    const transcript       = r[cols.Transcript] || '';
 
     if (!courseId) continue;
     if (aiSummary)  { Logger.log(`⏭ 跳過（已有內容）：${courseId} ${title}`); continue; }
@@ -1113,8 +1094,7 @@ function forceVertexAuth_v2() {
 // ============================================================
 function fixInflatedLearningMinutes() {
   const sheet = getSheet(SHEET_NAMES.USER_PROGRESS);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(sheet);
 
   let fixed = 0;
   for (let i = 1; i < rows.length; i++) {
@@ -1150,8 +1130,7 @@ function fixMaterialUrls() {
   const folder  = DriveApp.getFolderById(FOLDER_ID);
   const files   = folder.getFiles();
   const sheet   = getSheet(SHEET_NAMES.COURSES);
-  const cols    = _colMap(sheet);
-  const rows    = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(sheet);
 
   // 建立 Drive 檔案 map：{ 檔名小寫 → { id, name, mimeType } }
   const driveMap = {};
@@ -1259,9 +1238,7 @@ function getDeptReport({ deptId, requestUserId, sessionToken }) {
   const authErr = _requireManagerOrAdmin(sessionToken, requestUserId);
   if (authErr) return { status: 'error', message: authErr };
 
-  const userSheet = getSheet(SHEET_NAMES.USERS);
-  const userCols  = _colMap(userSheet);
-  const userRows  = userSheet.getDataRange().getValues();
+  const { cols: userCols, rows: userRows } = _readSheet(getSheet(SHEET_NAMES.USERS));
 
   // 驗證權限：manager 只能看自己部門，admin 可以看全部
   let requesterRole = '', requesterDept = '';
@@ -1290,12 +1267,8 @@ function getDeptReport({ deptId, requestUserId, sessionToken }) {
   }
 
   // 取得全域 + 部門必修課
-  const courseSheet = getSheet(SHEET_NAMES.COURSES);
-  const courseCols  = _colMap(courseSheet);
-  const courseRows  = courseSheet.getDataRange().getValues();
-  const dmSheet     = getSheet(SHEET_NAMES.DEPT_MANDATORY);
-  const dmCols      = _colMap(dmSheet);
-  const dmRows      = dmSheet.getDataRange().getValues();
+  const { cols: courseCols, rows: courseRows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
+  const { cols: dmCols,     rows: dmRows }     = _readSheet(getSheet(SHEET_NAMES.DEPT_MANDATORY));
 
   const deptMandatorySet = new Set();
   for (let i = 1; i < dmRows.length; i++) {
@@ -1318,12 +1291,8 @@ function getDeptReport({ deptId, requestUserId, sessionToken }) {
   }
 
   // 建立每位員工的完課 Set
-  const progressSheet = getSheet(SHEET_NAMES.PROGRESS);
-  const progressCols  = _colMap(progressSheet);
-  const progressRows  = progressSheet.getDataRange().getValues();
-  const ojtSheet      = getSheet(SHEET_NAMES.OJT_TASKS);
-  const ojtCols       = _colMap(ojtSheet);
-  const ojtRows       = ojtSheet.getDataRange().getValues();
+  const { cols: progressCols, rows: progressRows } = _readSheet(getSheet(SHEET_NAMES.PROGRESS));
+  const { cols: ojtCols,      rows: ojtRows }      = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
   const completionMap = {};
   for (const u of deptUsers) completionMap[u.userId] = new Set();
 
@@ -1398,9 +1367,7 @@ function getDeptMandatory({ deptId, requestUserId, sessionToken }) {
   const err = _requireManagerOrAdmin(sessionToken, requestUserId);
   if (err) return { status: 'error', message: err };
 
-  const sheet = getSheet(SHEET_NAMES.DEPT_MANDATORY);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.DEPT_MANDATORY));
   const courseIds = [];
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][cols.DeptId]).trim() === deptId) {
@@ -1424,8 +1391,7 @@ function setDeptMandatory({ deptId, courseId, isAdd, requestUserId, sessionToken
   lock.waitLock(5000);
   try {
     const sheet = getSheet(SHEET_NAMES.DEPT_MANDATORY);
-    const cols  = _colMap(sheet);
-    const rows  = sheet.getDataRange().getValues();
+    const { cols, rows } = _readSheet(sheet);
 
     if (isAdd) {
       for (let i = 1; i < rows.length; i++) {
@@ -1458,9 +1424,7 @@ function submitQuiz({ userId, courseId, answers, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  const sheet = getSheet(SHEET_NAMES.COURSES);
-  const cols  = _colMap(sheet);
-  const rows  = sheet.getDataRange().getValues();
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
   let quizData = null;
   for (let i = 2; i < rows.length; i++) {
     if (String(rows[i][cols.CourseId]).trim() === String(courseId).trim()) {
@@ -1494,9 +1458,7 @@ function getDepartments({ requestUserId, sessionToken }) {
   const authErr = _requireManagerOrAdmin(sessionToken, requestUserId);
   if (authErr) return { status: 'error', message: authErr };
 
-  const userSheet = getSheet(SHEET_NAMES.USERS);
-  const cols      = _colMap(userSheet);
-  const userRows  = userSheet.getDataRange().getValues();
+  const { cols, rows: userRows } = _readSheet(getSheet(SHEET_NAMES.USERS));
 
   const deptMap = {};
   for (let i = 1; i < userRows.length; i++) {
@@ -1535,23 +1497,11 @@ function checkOverdueAndNotify() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const userSheet     = getSheet(SHEET_NAMES.USERS);
-  const courseSheet   = getSheet(SHEET_NAMES.COURSES);
-  const dmSheet       = getSheet(SHEET_NAMES.DEPT_MANDATORY);
-  const progressSheet = getSheet(SHEET_NAMES.PROGRESS);
-  const ojtSheet      = getSheet(SHEET_NAMES.OJT_TASKS);
-
-  const userCols     = _colMap(userSheet);
-  const courseCols   = _colMap(courseSheet);
-  const dmCols       = _colMap(dmSheet);
-  const progressCols = _colMap(progressSheet);
-  const ojtCols      = _colMap(ojtSheet);
-
-  const userRows      = userSheet.getDataRange().getValues();
-  const courseRows    = courseSheet.getDataRange().getValues();
-  const dmRows        = dmSheet.getDataRange().getValues();
-  const progressRows  = progressSheet.getDataRange().getValues();
-  const ojtRows       = ojtSheet.getDataRange().getValues();
+  const { cols: userCols,     rows: userRows }     = _readSheet(getSheet(SHEET_NAMES.USERS));
+  const { cols: courseCols,   rows: courseRows }   = _readSheet(getSheet(SHEET_NAMES.COURSES));
+  const { cols: dmCols,       rows: dmRows }       = _readSheet(getSheet(SHEET_NAMES.DEPT_MANDATORY));
+  const { cols: progressCols, rows: progressRows } = _readSheet(getSheet(SHEET_NAMES.PROGRESS));
+  const { cols: ojtCols,      rows: ojtRows }      = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
 
   // 全域必修課 + 固定期限
   const globalMandatory = [];
