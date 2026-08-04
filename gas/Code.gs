@@ -102,7 +102,35 @@ function safeParseJSON(str, fallback) {
 }
 
 // ------------------------------------------------------------
-// 欄位名稱對照表：讀取 Sheet 第一列標題文字，回傳 { 標題文字: 0-based 欄位位置 }
+// 標題別名對照：實際 Sheet 有些表用中文標題（例如 Progress 表是
+// 工號/課程ID/獲得徽章/完成時間），程式內部一律用英文欄位名稱。
+// 這裡把已知的中文標題正規化成程式用的英文名稱，兩種寫法都能相容，
+// 不需要手動去改 Sheet 標題（改標題容易打錯或漏改，風險更高）。
+// 之後若有新的中文標題，加進這張表即可，不用改任何邏輯。
+// ------------------------------------------------------------
+const HEADER_ALIASES = {
+  '工號':     'UserId',
+  '員工編號': 'UserId',
+  '課程ID':   'CourseId',
+  '課程編號': 'CourseId',
+  '獲得徽章': 'Badges',
+  '徽章':     'Badges',
+  '完成時間': 'CompletedAt',
+  '完課時間': 'CompletedAt',
+  '姓名':     'Name',
+  '部門':     'Department',
+  '角色':     'Role',
+  '信箱':     'Email',
+  '電子郵件': 'Email'
+};
+
+function _normalizeHeader(h) {
+  const raw = String(h).trim();
+  return HEADER_ALIASES[raw] || raw;
+}
+
+// ------------------------------------------------------------
+// 欄位名稱對照表：讀取 Sheet 第一列標題文字，回傳 { 欄位名稱: 0-based 欄位位置 }
 // 之後所有讀寫都用 cols.欄位名稱，不用寫死的數字，插入新欄不會讓舊邏輯錯位。
 // 只需要欄位對照、不需要整表資料時用這個（例如只讀特定一列）。
 // ------------------------------------------------------------
@@ -110,7 +138,7 @@ function _colMap(sheet) {
   const lastCol = sheet.getLastColumn();
   const header  = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
   const map = {};
-  header.forEach((h, i) => { if (h) map[String(h).trim()] = i; });
+  header.forEach((h, i) => { if (h) map[_normalizeHeader(h)] = i; });
   return map;
 }
 
@@ -124,7 +152,7 @@ function _colMap(sheet) {
 function _readSheet(sheet) {
   const rows = sheet.getDataRange().getValues();
   const cols = {};
-  (rows[0] || []).forEach((h, i) => { if (h) cols[String(h).trim()] = i; });
+  (rows[0] || []).forEach((h, i) => { if (h) cols[_normalizeHeader(h)] = i; });
   return { cols, rows };
 }
 
@@ -1098,12 +1126,16 @@ function checkSheetHeaders() {
 
     const cols    = _colMap(sheet);
     const missing = expected[sheetName].filter(c => cols[c] === undefined);
+    // 原始標題（未經別名正規化），方便對照 Sheet 上實際看到的文字
+    const rawHeader = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
+      .map(h => String(h).trim()).filter(h => h);
 
     if (missing.length === 0) {
       Logger.log(`✅ ${sheetName}`);
     } else {
       Logger.log(`❌ ${sheetName} 缺少欄位：${missing.join('、')}`);
-      Logger.log(`   實際標題列：${Object.keys(cols).join(' | ')}`);
+      Logger.log(`   Sheet 上的實際標題：${rawHeader.join(' | ')}`);
+      Logger.log(`   程式實際認得的欄位：${Object.keys(cols).join(' | ')}`);
       allOk = false;
     }
 
