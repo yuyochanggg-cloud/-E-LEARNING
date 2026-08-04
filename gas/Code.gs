@@ -1150,6 +1150,43 @@ function checkSheetHeaders() {
 }
 
 // ============================================================
+// [工具函式] dumpProblemSheets()
+//
+// 用途：把 Users 與 DeptMandatory 兩張表的前幾列「逐格」印出來（含空白格
+//       與隱藏字元），用來判斷欄位到底是「標題格空白但有資料」還是
+//       「整欄沒資料」、以及一格裡面是不是塞了 Tab 之類的隱藏字元。
+//       checkSheetHeaders 會過濾空白標題，看不出這些狀況，所以另開這個。
+//
+// 使用方式：GAS 編輯器選這個函式執行，把「執行紀錄」整段貼回來。
+// ============================================================
+function dumpProblemSheets() {
+  [SHEET_NAMES.USERS, SHEET_NAMES.DEPT_MANDATORY].forEach(name => {
+    const sheet = getSheet(name);
+    if (!sheet) { Logger.log(`找不到工作表：${name}`); return; }
+
+    const lastCol = Math.max(sheet.getLastColumn(), 10);
+    const lastRow = Math.min(sheet.getLastRow(), 4); // 只看前幾列，避免印出全部個資
+    const values  = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+    Logger.log(`\n===== ${name}（共 ${sheet.getLastColumn()} 欄 / ${sheet.getLastRow()} 列）=====`);
+    values.forEach((row, r) => {
+      const cells = row.map((v, c) => {
+        const letter = String.fromCharCode(65 + c);
+        let shown;
+        if (v === '' || v === null) {
+          shown = '(空白)';
+        } else {
+          // 把 Tab / 換行顯示成看得見的符號，找出貼上時混進來的隱藏字元
+          shown = String(v).replace(/\t/g, '⇥').replace(/\n/g, '⏎');
+        }
+        return `${letter}${r + 1}=${shown}`;
+      });
+      Logger.log(cells.join('  |  '));
+    });
+  });
+}
+
+// ============================================================
 // [工具函式] forceVertexAuth_v2()
 // 用途：全新函式，強迫 GAS 重新計算這次執行需要的權限範圍，
 //       避免舊的授權快取讓 cloud-platform scope 被跳過檢查。
