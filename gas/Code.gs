@@ -133,6 +133,17 @@ function _readSheet(sheet) {
 // values: { 欄位名稱: 值, ... }，沒填到的欄位自動補空字串
 // ------------------------------------------------------------
 function _buildRow(cols, values) {
+  // 防呆：Sheet 標題列少了任何一個要寫入的欄位名稱時，cols[k] 會是 undefined，
+  // arr[undefined]=value 會變成設字串屬性而不是陣列索引，導致 appendRow 收到
+  // 空陣列或破損陣列、丟出很難看懂的錯誤。這裡先明確指出是哪個欄位對不上。
+  const missing = Object.keys(values).filter(k => cols[k] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      'Sheet 標題列找不到這些欄位：' + missing.join('、') +
+      '（請確認標題文字完全一致，大小寫與拼字都要對）'
+    );
+  }
+
   const arr = [];
   Object.keys(values).forEach(k => { arr[cols[k]] = values[k]; });
   for (let i = 0; i < arr.length; i++) if (arr[i] === undefined) arr[i] = '';
@@ -1048,6 +1059,62 @@ function testVertexConnection() {
   } catch (err) {
     Logger.log('❌ 錯誤：' + err.toString());
   }
+}
+
+// ============================================================
+// [工具函式] checkSheetHeaders()
+//
+// 用途：一次檢查六張表的標題列是否跟程式碼期待的欄位名稱完全一致。
+//       欄位名稱查表機制的唯一前提就是「標題文字要對」，這個函式
+//       把所有對不上的地方一次列出來，不用一個一個猜。
+//
+// 使用方式：GAS 編輯器選這個函式執行，看「執行紀錄」。
+//          全部顯示 ✅ 才代表 Sheet 結構跟程式碼一致。
+// ============================================================
+function checkSheetHeaders() {
+  const expected = {
+    [SHEET_NAMES.USERS]:          ['UserId', 'Email', 'Name', 'Role', 'CreatedAt', 'LastLogin', 'Password', 'IsFirstLogin', 'Department'],
+    [SHEET_NAMES.COURSES]:        ['CourseId', 'Title', 'Category', 'IsMandatory', 'Duration', 'Badges', 'MaterialType', 'MaterialUrl', 'MaterialTextUrl', 'OjtRequired', 'OjtDescription', 'AiSummary', 'AiQuiz', 'Transcript'],
+    [SHEET_NAMES.PROGRESS]:       ['UserId', 'CourseId', 'Badges', 'CompletedAt'],
+    [SHEET_NAMES.USER_PROGRESS]:  ['UserId', 'CompletedCourses', 'EarnedBadges', 'TotalLearningMinutes'],
+    [SHEET_NAMES.OJT_TASKS]:      ['TaskId', 'UserId', 'CourseId', 'Status', 'SubmittedAt', 'ApprovedAt', 'OjtFileUrl', 'IsSyncedToBQ'],
+    [SHEET_NAMES.DEPT_MANDATORY]: ['DeptId', 'CourseId']
+  };
+  // 選填欄位（沒有也不算錯，只是對應功能不會生效）
+  const optional = {
+    [SHEET_NAMES.COURSES]:        ['DueDate'],
+    [SHEET_NAMES.DEPT_MANDATORY]: ['DueDays']
+  };
+
+  let allOk = true;
+
+  Object.keys(expected).forEach(sheetName => {
+    const sheet = getSheet(sheetName);
+    if (!sheet) {
+      Logger.log(`❌ 找不到工作表：${sheetName}`);
+      allOk = false;
+      return;
+    }
+
+    const cols    = _colMap(sheet);
+    const missing = expected[sheetName].filter(c => cols[c] === undefined);
+
+    if (missing.length === 0) {
+      Logger.log(`✅ ${sheetName}`);
+    } else {
+      Logger.log(`❌ ${sheetName} 缺少欄位：${missing.join('、')}`);
+      Logger.log(`   實際標題列：${Object.keys(cols).join(' | ')}`);
+      allOk = false;
+    }
+
+    (optional[sheetName] || []).forEach(c => {
+      if (cols[c] === undefined) {
+        Logger.log(`   ⚠️ ${sheetName} 沒有選填欄位 ${c}（該功能不會生效，不影響其他功能）`);
+      }
+    });
+  });
+
+  Logger.log(allOk ? '\n全部通過，Sheet 結構與程式碼一致。' : '\n有欄位對不上，請照上面訊息修正標題文字。');
 }
 
 // ============================================================
