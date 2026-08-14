@@ -844,6 +844,8 @@ function MiniPlayer({ nowPlaying, isPlaying, speed, onSpeedChange, onTogglePlay,
   );
 }
 
+const DASHBOARD_ELECTIVE_PREVIEW_COUNT = 6;
+
 function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
   // 🛡️ 守門員：確保資料存在
   if (!courses || !progress) {
@@ -956,20 +958,30 @@ function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
         </div>
       </div>
 
-      {/* ✨ 選修池 */}
+      {/* ✨ 選修池：Dashboard 只做快速入口，不重複資源庫的完整瀏覽，
+          固定顯示最新 6 堂（3欄 grid 剛好兩整排），其餘導去資源庫 */}
       <div className="pt-8 border-t border-slate-200">
-        <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center">
-          <Sparkles className="w-5 h-5 mr-2 text-amber-500"/> T 型選修池
-        </h3>
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-xl font-bold text-slate-800 flex items-center">
+            <Sparkles className="w-5 h-5 mr-2 text-amber-500"/> T 型選修池
+          </h3>
+          <button onClick={onViewAll} className="text-blue-600 font-bold hover:underline text-sm">
+            更多選修課 {'>'}
+          </button>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {electiveCourses.map(course => (
-            <CourseCard 
-              key={course.id} 
-              course={course} 
-              isCompleted={course.isCompleted} 
-              onClick={() => onStartCourse(course)} 
-            />
-          ))}
+          {electiveCourses
+            .slice()
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+            .slice(0, DASHBOARD_ELECTIVE_PREVIEW_COUNT)
+            .map(course => (
+              <CourseCard
+                key={course.id}
+                course={course}
+                isCompleted={course.isCompleted}
+                onClick={() => onStartCourse(course)}
+              />
+            ))}
         </div>
       </div>
     </div>
