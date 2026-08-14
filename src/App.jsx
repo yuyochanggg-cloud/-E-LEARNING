@@ -976,9 +976,12 @@ function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
   );
 }
 
+const LIBRARY_PREVIEW_COUNT = 4;
+
 function LibraryView({ courses, progress, onStartCourse }) {
   // 1. 確保 categoriesConfig 存在 (這是你定義那 6 個頻道的地方)
   const categories = Object.keys(categoriesConfig);
+  const [expandedCats, setExpandedCats] = useState({});
 
   // 🛡️ 安全檢查：如果 courses 還沒抓到，先顯示載入中
   if (!courses || courses.length === 0) {
@@ -1006,23 +1009,23 @@ function LibraryView({ courses, progress, onStartCourse }) {
         </div>
       </div>
 
-      {/* 📚 依照頻道產出課程 (使用你原本的 categoriesConfig 迴圈) */}
+      {/* 📚 依照頻道產出課程：六個頻道固定顯示，空頻道顯示「內容製作中」 */}
       {categories.map(catName => {
-        // ✨ 強化過濾邏輯：去除前後空格，確保比對精準
-        const catCourses = courses.filter(c => {
-          const courseCat = (c.category || "").trim();
-          return courseCat === catName.trim();
-        });
+        // ✨ 強化過濾邏輯：去除前後空格，確保比對精準；依 createdAt 新到舊排序
+        const catCourses = courses
+          .filter(c => (c.category || "").trim() === catName.trim())
+          .slice()
+          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-        // 如果這個分類真的沒課，就不要顯示這個標題
-        if (catCourses.length === 0) return null;
-        
         const config = categoriesConfig[catName];
         const Icon = config.icon;
+        const isExpanded = !!expandedCats[catName];
+        const visibleCourses = isExpanded ? catCourses : catCourses.slice(0, LIBRARY_PREVIEW_COUNT);
+        const hasMore = catCourses.length > LIBRARY_PREVIEW_COUNT;
 
         return (
           <div key={catName} className="space-y-6">
-            
+
             {/* 🏷️ 分類標題列 */}
             <div className="flex items-center border-b border-slate-200 pb-4">
               <div className={`p-3 rounded-2xl ${config.bg} ${config.color} mr-4 shadow-sm`}>
@@ -1041,20 +1044,41 @@ function LibraryView({ courses, progress, onStartCourse }) {
               </div>
             </div>
 
-            {/* 🃏 課程卡片網格 (確保呼叫你原本的 CourseCard) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
-              {catCourses.map(course => (
-                <CourseCard
-                  key={course.id}
-                  course={course}
-                  // 統一用後端算好的 course.isCompleted（已含 OJT 核准），
-                  // 不要改用 progress.completedCourses 判斷——那份彙總是快取，
-                  // OJT 核准後若沒同步就會出現「其他頁顯示完成、資源庫不亮」
-                  isCompleted={course.isCompleted === true}
-                  onClick={() => onStartCourse(course)}
-                />
-              ))}
-            </div>
+            {catCourses.length === 0 ? (
+              /* 🚧 空頻道：內容還沒上架，顯示製作中而不是留白或直接消失 */
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 py-14 text-center">
+                <Icon className={`w-8 h-8 mx-auto mb-3 ${config.color} opacity-40`} />
+                <p className="text-slate-400 font-bold">內容製作中，敬請期待</p>
+              </div>
+            ) : (
+              <>
+                {/* 🃏 課程卡片網格 (確保呼叫你原本的 CourseCard) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
+                  {visibleCourses.map(course => (
+                    <CourseCard
+                      key={course.id}
+                      course={course}
+                      // 統一用後端算好的 course.isCompleted（已含 OJT 核准），
+                      // 不要改用 progress.completedCourses 判斷——那份彙總是快取，
+                      // OJT 核准後若沒同步就會出現「其他頁顯示完成、資源庫不亮」
+                      isCompleted={course.isCompleted === true}
+                      onClick={() => onStartCourse(course)}
+                    />
+                  ))}
+                </div>
+
+                {hasMore && (
+                  <div className="text-center">
+                    <button
+                      onClick={() => setExpandedCats(prev => ({ ...prev, [catName]: !prev[catName] }))}
+                      className="text-sm font-bold text-blue-600 hover:text-blue-800 px-5 py-2 rounded-full border border-blue-200 hover:bg-blue-50 transition-colors"
+                    >
+                      {isExpanded ? '收合' : `查看更多（還有 ${catCourses.length - LIBRARY_PREVIEW_COUNT} 堂）`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         );
       })}

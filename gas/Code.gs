@@ -123,7 +123,9 @@ const HEADER_ALIASES = {
   '部門':     'Department',
   '角色':     'Role',
   '信箱':     'Email',
-  '電子郵件': 'Email'
+  '電子郵件': 'Email',
+  '建立時間': 'CreatedAt',
+  '新增時間': 'CreatedAt'
 };
 
 function _normalizeHeader(h) {
@@ -460,7 +462,10 @@ function _getCourseCatalog() {
       ojtRequired:     r[cols.OjtRequired] === true || r[cols.OjtRequired] === 'TRUE',
       ojtDescription:  r[cols.OjtDescription] || '',
       hasQuiz:         !!r[cols.AiQuiz],
-      hasSummary:      !!r[cols.AiSummary]
+      hasSummary:      !!r[cols.AiSummary],
+      // 沒有 CreatedAt（舊課程、或還沒被 onEdit 蓋過時間）一律當最舊處理，
+      // 前端「最新 4 堂」排序時會自然排到後面，不會噴錯或排到最前面。
+      createdAt:       r[cols.CreatedAt] ? new Date(r[cols.CreatedAt]).getTime() : 0
     });
   }
 
@@ -471,6 +476,38 @@ function _getCourseCatalog() {
     Logger.log('課程目錄快取失敗（可能過大）：' + e.toString());
   }
   return catalog;
+}
+
+// ============================================================
+// onEdit 簡易觸發器：Courses 表新增課程列時自動蓋 CreatedAt
+//
+// 維持原本「直接在 Sheet 打一列新課程」的習慣，不用另外記得填時間——
+// 只要那一列 Category 有填、CreatedAt 還空著，編輯存檔時就自動蓋上當下
+// 時間。函式名稱固定叫 onEdit 是簡易觸發器的寫法，不用另外部署或授權，
+// 但也因此權限受限：只能寫回目前這個試算表，不能呼叫其他服務。
+// ============================================================
+function onEdit(e) {
+  try {
+    const sheet = e.range.getSheet();
+    if (sheet.getName() !== SHEET_NAMES.COURSES) return;
+
+    const row = e.range.getRow();
+    if (row <= 2) return; // 1=標題列，2=範例列
+
+    const cols = _colMap(sheet);
+    if (cols.CreatedAt === undefined || cols.Category === undefined) return;
+
+    const rowValues = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
+    if (!rowValues[cols.Category]) return; // 這列還沒填分類，不算一門課
+    if (rowValues[cols.CreatedAt]) return; // 已經蓋過時間，不重複覆寫
+
+    sheet.getRange(row, cols.CreatedAt + 1).setValue(new Date());
+    _invalidateCourseCache();
+  } catch (err) {
+    // 簡易觸發器不能跳錯誤視窗給使用者看，吞掉錯誤避免卡住正常編輯，
+    // 有需要診斷時看 Apps Script 的執行紀錄（不是 Logger.log，簡易觸發器
+    // 的 Logger 不一定看得到，改看「執行項目」列表）。
+  }
 }
 
 // ============================================================
