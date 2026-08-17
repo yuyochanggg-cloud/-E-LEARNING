@@ -696,13 +696,13 @@ const handleCourseComplete = async (badges) => {
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
       {/* --- 左側導航列 --- */}
       <nav className="bg-slate-900 text-slate-300 w-full md:w-64 flex-shrink-0 flex md:flex-col justify-between md:justify-start shadow-xl z-20 fixed md:sticky bottom-0 md:top-0 h-16 md:h-screen">
-        <div className="p-4 md:p-6 hidden md:flex items-center space-x-3 mb-6 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigateTo('dashboard')}>
+        <button type="button" className="w-full text-left p-4 md:p-6 hidden md:flex items-center space-x-3 mb-6 cursor-pointer hover:opacity-80 focus-visible:ring-2 focus-visible:ring-blue-400 transition-all" onClick={() => navigateTo('dashboard')}>
           <div className="bg-blue-600 p-2 rounded-lg shadow-lg shadow-blue-900/50"><Cloud className="w-6 h-6 text-white" /></div>
           <div>
             <span className="text-xl font-bold text-white tracking-wider block">良興雲端學院</span>
             <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">Cloud E-Learning</span>
           </div>
-        </div>
+        </button>
 
         <div className="flex md:flex-col w-full px-2 md:px-4 py-2 md:py-0 space-y-0 md:space-y-2 justify-around md:justify-start overflow-y-auto">
           {/* 備註：你原本使用了 <NavItem />，確保這個組件存在，或者直接替換為 button */}
@@ -1083,7 +1083,7 @@ function LibraryView({ courses, progress, onStartCourse }) {
                   <div className="text-center">
                     <button
                       onClick={() => setExpandedCats(prev => ({ ...prev, [catName]: !prev[catName] }))}
-                      className="text-sm font-bold text-blue-600 hover:text-blue-800 px-5 py-2 rounded-full border border-blue-200 hover:bg-blue-50 transition-colors"
+                      className="min-h-[44px] text-sm font-bold text-blue-600 hover:text-blue-800 px-5 py-2 rounded-full border border-blue-200 hover:bg-blue-50 transition-colors"
                     >
                       {isExpanded ? '收合' : `查看更多（還有 ${catCourses.length - LIBRARY_PREVIEW_COUNT} 堂）`}
                     </button>
@@ -1103,7 +1103,7 @@ function CourseCard({ course, isCompleted, onClick }) {
   const CatIcon = catConfig.icon;
 
   return (
-    <div onClick={onClick} className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 hover:shadow-xl hover:border-blue-400 transition-all cursor-pointer group flex flex-col h-full relative overflow-hidden">
+    <button type="button" onClick={onClick} className="w-full text-left bg-white rounded-2xl p-6 shadow-sm border border-slate-200 hover:shadow-xl hover:border-blue-400 focus-visible:ring-2 focus-visible:ring-blue-400 transition-all cursor-pointer group flex flex-col h-full relative overflow-hidden">
       {isCompleted && (
         <div className="absolute top-0 right-0 bg-emerald-500 text-white text-xs font-bold px-4 py-1.5 rounded-bl-xl shadow-sm z-10 flex items-center">
           <CheckCircle className="w-3 h-3 mr-1" /> 已完課
@@ -1150,7 +1150,7 @@ function CourseCard({ course, isCompleted, onClick }) {
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -2143,9 +2143,21 @@ function QuizSection({ course, quiz, isLoading, onSubmit, isAlreadyPassed, badge
           <div className="space-y-3">
             {q.options.map((option, oIndex) => {
               const isSelected = answers[qIndex] === oIndex;
+              // 真的 <input type="radio"> 才有原生鍵盤操作（Tab/方向鍵/空白鍵）與
+              // 螢幕閱讀器語意；視覺上用 sr-only 藏起來，圓圈 div 純裝飾（aria-hidden）。
               return (
-                <label key={oIndex} onClick={() => handleSelect(qIndex, oIndex)} className={`flex items-center p-4 rounded-xl border-2 cursor-pointer transition-all ${isSelected ? 'border-blue-500 bg-blue-50 text-blue-800 font-bold' : 'border-slate-100 text-slate-600'}`}>
-                  <div className={`w-4 h-4 rounded-full border mr-3 flex items-center justify-center ${isSelected ? 'border-blue-500 bg-blue-500' : 'border-slate-300'}`}>
+                <label
+                  key={oIndex}
+                  className={`flex items-center p-4 rounded-xl border-2 cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-400 transition-all ${isSelected ? 'border-blue-500 bg-blue-50 text-blue-800 font-bold' : 'border-slate-100 text-slate-600'}`}
+                >
+                  <input
+                    type="radio"
+                    name={`quiz-q${qIndex}`}
+                    checked={isSelected}
+                    onChange={() => handleSelect(qIndex, oIndex)}
+                    className="sr-only"
+                  />
+                  <div aria-hidden="true" className={`w-4 h-4 rounded-full border mr-3 flex-shrink-0 flex items-center justify-center ${isSelected ? 'border-blue-500 bg-blue-500' : 'border-slate-300'}`}>
                     {isSelected && <div className="w-1.5 h-1.5 bg-white rounded-full"></div>}
                   </div>
                   {option}
