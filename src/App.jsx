@@ -1015,7 +1015,7 @@ function LibraryView({ courses, progress, onStartCourse }) {
           <div className="flex items-start bg-white/10 p-4 rounded-xl border border-white/20 backdrop-blur-sm max-w-2xl">
             <Info className="w-5 h-5 text-blue-300 mr-3 flex-shrink-0 mt-0.5" />
             <p className="text-blue-50 text-sm leading-relaxed font-medium">
-              我們的課程分為六大主題，結合後台 KSA 戰略建模，讓學習更貼近您的日常需求。
+              課程分成六大頻道，照你需要的主題找就對了。
             </p>
           </div>
         </div>
@@ -1045,9 +1045,6 @@ function LibraryView({ courses, progress, onStartCourse }) {
               </div>
               <div>
                 <h2 className="text-2xl font-black text-slate-800 tracking-tight">{catName}</h2>
-                <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
-                  HR 戰略維度: {config.backend}
-                </p>
               </div>
               <div className="ml-auto">
                  <span className="text-sm font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
