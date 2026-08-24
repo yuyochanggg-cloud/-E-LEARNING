@@ -607,14 +607,22 @@ function getCourses({ userId, sessionToken }) {
   }
 
   // OJT 狀態
+  // ojtPending／ojtApproved：曾經有過就算（核准是永久性的，不該因為後面雜訊列而消失）
+  // ojtLatest：依 Sheet 列順序覆寫，跑完迴圈後留下的是「這門課最新一筆」的狀態＋退回理由，
+  // 用來判斷退回後、還沒重新提交這段期間該顯示什麼（提交表單不能跟「從沒交過」長一樣）
   const ojtPending  = new Set();
   const ojtApproved = new Set();
+  const ojtLatest    = new Map();
   for (let i = 1; i < ojtRows.length; i++) {
     if (String(ojtRows[i][ojtCols.UserId]).trim() !== String(userId).trim()) continue;
     const status   = String(ojtRows[i][ojtCols.Status]).trim();
     const courseId = String(ojtRows[i][ojtCols.CourseId]).trim();
     if (status === 'pending')  ojtPending.add(courseId);
     if (status === 'approved') ojtApproved.add(courseId);
+    ojtLatest.set(courseId, {
+      status,
+      reason: (ojtCols.RejectReason !== undefined ? ojtRows[i][ojtCols.RejectReason] : '') || ''
+    });
   }
 
   // 用快取的課程目錄 + 這位使用者的狀態疊加，不再每次整表讀 Courses
@@ -637,7 +645,9 @@ function getCourses({ userId, sessionToken }) {
     isCompleted:     completedSet.has(c.id) || ojtApproved.has(c.id),
     ojtStatus:       ojtApproved.has(c.id) ? 'approved'
                    : ojtPending.has(c.id)  ? 'pending'
-                   : null
+                   : (ojtLatest.get(c.id) || {}).status === 'rejected' ? 'rejected'
+                   : null,
+    ojtRejectReason: (ojtLatest.get(c.id) || {}).status === 'rejected' ? (ojtLatest.get(c.id).reason || '') : ''
   }));
 
   return courses; // 前端直接收陣列
@@ -905,12 +915,15 @@ function getPendingOJTTasks({ requestUserId, sessionToken } = {}) {
 // → { success:true }
 // ============================================================
 
-function reviewOJTTask({ rowNumber, taskId, newStatus, requestUserId, sessionToken }) {
+function reviewOJTTask({ rowNumber, taskId, newStatus, rejectReason, requestUserId, sessionToken }) {
   const err = _requireManagerOrAdmin(sessionToken, requestUserId);
   if (err) return { status: 'error', message: err };
 
   if (newStatus !== 'approved' && newStatus !== 'rejected') {
     return { status: 'error', message: '無效的審核狀態' };
+  }
+  if (newStatus === 'rejected' && !String(rejectReason || '').trim()) {
+    return { status: 'error', message: '退回請填寫理由，員工才知道要怎麼修改' };
   }
 
   const lock = LockService.getScriptLock();
@@ -964,6 +977,10 @@ function reviewOJTTask({ rowNumber, taskId, newStatus, requestUserId, sessionTok
     }
 
     ojtSheet.getRange(targetRow, ojtCols.Status + 1).setValue(newStatus);
+
+    if (newStatus === 'rejected' && ojtCols.RejectReason !== undefined) {
+      ojtSheet.getRange(targetRow, ojtCols.RejectReason + 1).setValue(String(rejectReason).trim());
+    }
 
     if (newStatus === 'approved') {
       ojtSheet.getRange(targetRow, ojtCols.ApprovedAt + 1).setValue(new Date());

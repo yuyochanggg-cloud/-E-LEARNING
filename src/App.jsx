@@ -216,7 +216,7 @@ export default function App() {
   // ==========================================
   // 2. 核心資料抓取邏輯 (統一由這個函式負責)
   // ==========================================
-  const fetchDashboardData = async (validUserId) => {
+  const fetchDashboardData = async (validUserId, sessionRetriesLeft = 2) => {
     try {
       setIsLoading(true);
 
@@ -227,7 +227,17 @@ export default function App() {
         // 只有「登入逾期／身分驗證失敗」才強制登出，其他錯誤保留登入狀態
         // （否則任何後端暫時性錯誤都會把使用者踢出去）
         const msg = String(res.message || '');
-        if (msg.indexOf('逾期') >= 0 || msg.indexOf('身分驗證') >= 0) {
+        const isSessionError = msg.indexOf('逾期') >= 0 || msg.indexOf('身分驗證') >= 0;
+
+        // 剛登入拿到的 sessionToken 極少數情況下後端 CacheService 還沒完全
+        // 寫入生效，第一次驗證就撲空——這種情況稍等一下重試通常就會成功，
+        // 不該直接判定成「登入逾期」把剛登入成功的人立刻踢回登入頁。
+        if (isSessionError && sessionRetriesLeft > 0) {
+          await new Promise(resolve => setTimeout(resolve, 700));
+          return await fetchDashboardData(validUserId, sessionRetriesLeft - 1);
+        }
+
+        if (isSessionError) {
           localStorage.removeItem('cloud_academy_user');
           localStorage.removeItem('cloud_academy_token');
           showToast(msg || '登入已逾期，請重新登入', 'error');
@@ -1376,12 +1386,24 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
   }
 
   async function handleReview(task, newStatus) {
-    if (!window.confirm(newStatus === 'approved' ? '確定核准？' : '確定退回？')) return;
+    let rejectReason = '';
+    if (newStatus === 'rejected') {
+      // 用 prompt 一次收退回理由，員工才知道要怎麼改；填理由本身就等於確認退回，不用再多一個 confirm
+      rejectReason = window.prompt('請填寫退回理由（員工提交頁會直接看到這段文字）：');
+      if (rejectReason === null) return; // 使用者按取消
+      if (!rejectReason.trim()) {
+        showToast('退回請填寫理由，員工才知道要怎麼修改', 'warning');
+        return;
+      }
+    } else if (!window.confirm('確定核准？')) {
+      return;
+    }
     // 傳 taskId 讓後端定位，不靠 rowNumber（列號會因插入/刪除列而位移）
     const res = await gasClient.securePost('reviewOJTTask', {
       taskId: task.taskId,
       rowNumber: task.rowNumber,
       newStatus,
+      rejectReason,
       requestUserId: userId
     });
     if (res.success) {
@@ -2287,6 +2309,17 @@ function OJTSection({ course }) {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {ojtStatus === 'rejected' && (
+        <div className="p-5 bg-red-50 border-2 border-red-200 rounded-2xl flex items-start">
+          <AlertCircle className="w-5 h-5 text-red-500 mr-3 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="font-bold text-red-700">主管退回了上次的提交，請依建議修改後重新送出</p>
+            {course.ojtRejectReason && (
+              <p className="text-red-600 text-sm mt-1">退回理由：{course.ojtRejectReason}</p>
+            )}
+          </div>
+        </div>
+      )}
       <div className="p-8 bg-indigo-50/50 rounded-3xl border border-indigo-100 border-dashed">
         <div className="flex items-center mb-4">
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white mr-3">
