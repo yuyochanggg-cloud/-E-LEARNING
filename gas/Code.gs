@@ -2024,7 +2024,7 @@ function checkOverdueAndNotify() {
 
     if (dept) {
       if (!deptOverdueSummary[dept]) deptOverdueSummary[dept] = [];
-      deptOverdueSummary[dept].push({ name, count: overdueTitles.length });
+      deptOverdueSummary[dept].push({ name, titles: overdueTitles });
     }
   }
 
@@ -2039,7 +2039,9 @@ function checkOverdueAndNotify() {
     const overdueList = deptOverdueSummary[dept];
     if (!overdueList || overdueList.length === 0 || !email) continue;
 
-    const body = overdueList.map(o => `・${o.name}：${o.count} 門逾期`).join('\n');
+    const body = overdueList.map(o =>
+      `・${o.name}：\n` + o.titles.map(t => `    - ${t}`).join('\n')
+    ).join('\n\n');
     try {
       MailApp.sendEmail({
         to: email,
