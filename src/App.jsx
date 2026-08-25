@@ -8,7 +8,7 @@ import {
   ShieldCheck, Clock, Flame, Sun, Heart, TrendingUp, Gem,
   Cloud, AlertCircle, Info, ExternalLink, Rocket, BatteryCharging,
   Briefcase, Users, Target, Map, UploadCloud, Sparkles, Mic,
-  Lock, Key, Mail
+  Lock, Key, Mail, Eye, EyeOff
 } from 'lucide-react';
 
 import { gasClient } from './utils/gasClient';
@@ -182,6 +182,7 @@ export default function App() {
   const [isFirstLoginMode, setIsFirstLoginMode] = useState(false); // ✨ 新增：控制是否顯示強制換密碼畫面
   const [newPassword, setNewPassword] = useState(''); // ✨ 新增：新密碼
   const [confirmPassword, setConfirmPassword] = useState(''); // ✨ 新增：確認新密碼
+  const [showPassword, setShowPassword] = useState(false); // ✨ 無障礙補強：密碼顯示/隱藏切換
   const [notifyEmail, setNotifyEmail] = useState(''); // 首次登入蒐集提醒信箱
   const [showEmailPrompt, setShowEmailPrompt] = useState(false); // 既有帳號補填信箱的小視窗
   const [promptEmail, setPromptEmail] = useState('');
@@ -564,27 +565,34 @@ const handleCourseComplete = async (badges) => {
             {!isFirstLoginMode && (
               <>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">員工專屬工號</label>
+                  <label htmlFor="login-userid" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">員工專屬工號</label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><ShieldCheck size={20} /></div>
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><ShieldCheck size={20} /></div>
                     <input
+                      id="login-userid"
                       type="text" value={loginInput} onChange={(e) => setLoginInput(e.target.value)}
                       placeholder="請輸入工號 (例: 20880001)"
                       className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium text-slate-700"
-                      disabled={isLoggingIn} autoComplete="off"
+                      disabled={isLoggingIn} autoComplete="username"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">登入密碼</label>
+                  <label htmlFor="login-password" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">登入密碼</label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><Lock size={20} /></div>
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><Lock size={20} /></div>
                     <input
-                      type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                      id="login-password"
+                      type={showPassword ? 'text' : 'password'} value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                       placeholder="請輸入密碼 (預設為生日)"
-                      className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium text-slate-700"
-                      disabled={isLoggingIn}
+                      className="w-full pl-12 pr-12 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium text-slate-700"
+                      disabled={isLoggingIn} autoComplete="current-password"
                     />
+                    <button type="button" onClick={() => setShowPassword(v => !v)}
+                      aria-label={showPassword ? '隱藏密碼' : '顯示密碼'}
+                      className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-500 hover:text-slate-600">
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
                   </div>
                 </div>
               </>
@@ -598,38 +606,46 @@ const handleCourseComplete = async (badges) => {
                   為保障您的學習紀錄與個資安全，系統已暫時攔截登入，請設定專屬您的新密碼。
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">設定新密碼</label>
+                  <label htmlFor="new-password" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">設定新密碼</label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><Lock size={20} /></div>
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><Lock size={20} /></div>
                     <input
-                      type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+                      id="new-password"
+                      type={showPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
                       placeholder="請至少輸入 4 位數"
-                      className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
-                      disabled={isLoggingIn}
+                      className="w-full pl-12 pr-12 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
+                      disabled={isLoggingIn} autoComplete="new-password"
                     />
+                    <button type="button" onClick={() => setShowPassword(v => !v)}
+                      aria-label={showPassword ? '隱藏密碼' : '顯示密碼'}
+                      className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-500 hover:text-slate-600">
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">確認新密碼</label>
+                  <label htmlFor="confirm-password" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">確認新密碼</label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><CheckCircle size={20} /></div>
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><CheckCircle size={20} /></div>
                     <input
-                      type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+                      id="confirm-password"
+                      type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
                       placeholder="請再次輸入新密碼"
                       className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
-                      disabled={isLoggingIn}
+                      disabled={isLoggingIn} autoComplete="new-password"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">個人聯絡信箱</label>
+                  <label htmlFor="notify-email" className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">個人聯絡信箱</label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400"><Mail size={20} /></div>
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><Mail size={20} /></div>
                     <input
+                      id="notify-email"
                       type="email" value={notifyEmail} onChange={(e) => setNotifyEmail(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChangePassword()}
                       placeholder="用來接收必修課提醒通知"
                       className="w-full pl-12 pr-4 py-3.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all font-medium text-slate-700"
-                      disabled={isLoggingIn}
+                      disabled={isLoggingIn} autoComplete="email"
                     />
                   </div>
                 </div>
@@ -716,9 +732,9 @@ const handleCourseComplete = async (badges) => {
 
         <div className="flex md:flex-col w-full px-2 md:px-4 py-2 md:py-0 space-y-0 md:space-y-2 justify-around md:justify-start overflow-y-auto">
           {/* 備註：你原本使用了 <NavItem />，確保這個組件存在，或者直接替換為 button */}
-          <button onClick={() => navigateTo('dashboard')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">學習儀表板</span></button>
-          <button onClick={() => navigateTo('library')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'library' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}><Library className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">課程資源庫</span></button>
-          <button onClick={() => navigateTo('achievements')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'achievements' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}><Award className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">我的成就</span></button>
+          <button onClick={() => navigateTo('dashboard')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><LayoutDashboard className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">學習儀表板</span></button>
+          <button onClick={() => navigateTo('library')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'library' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Library className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">課程資源庫</span></button>
+          <button onClick={() => navigateTo('achievements')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'achievements' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Award className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">我的成就</span></button>
           
           {(userProfile?.role === 'manager' || userProfile?.role === 'admin') && (
             <button onClick={() => navigateTo('manager')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'manager' ? 'bg-amber-600 text-white' : 'text-amber-500 hover:bg-slate-800'}`}><ShieldCheck className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">{userProfile?.role === 'admin' ? '系統管理中心' : '主管審核中心'}</span></button>
@@ -757,7 +773,7 @@ const handleCourseComplete = async (badges) => {
               <span className="text-sm font-bold bg-slate-100 text-slate-600 px-4 py-2 rounded-full flex items-center shadow-inner border border-slate-200">
                 <Clock className="w-4 h-4 mr-2 text-blue-500" /> 累積時數: {progressData.totalLearningMinutes} 分鐘
               </span>
-              <button onClick={handleLogout} className="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors flex items-center">登出</button>
+              <button onClick={handleLogout} className="text-xs font-bold text-slate-500 hover:text-red-500 transition-colors flex items-center">登出</button>
             </div>
           </div>
         </header>
@@ -840,13 +856,13 @@ function MiniPlayer({ nowPlaying, isPlaying, speed, onSpeedChange, onTogglePlay,
         </div>
 
         {/* 播放/暫停 */}
-        <button onClick={onTogglePlay}
+        <button onClick={onTogglePlay} aria-label={isPlaying ? '暫停' : '播放'}
           className="w-9 h-9 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 transition-colors flex-shrink-0">
           {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
         </button>
 
         {/* 停止 */}
-        <button onClick={onStop} className="text-slate-400 hover:text-red-500 transition-colors flex-shrink-0 p-1">
+        <button onClick={onStop} aria-label="停止播放" className="text-slate-500 hover:text-red-500 transition-colors flex-shrink-0 p-1">
           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
         </button>
       </div>
@@ -859,7 +875,7 @@ const DASHBOARD_ELECTIVE_PREVIEW_COUNT = 6;
 function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
   // 🛡️ 守門員：確保資料存在
   if (!courses || !progress) {
-    return <div className="p-10 text-center text-slate-400 font-bold">資料同步中...</div>;
+    return <div className="p-10 text-center text-slate-500 font-bold">資料同步中...</div>;
   }
 
   // 1️⃣ 找出必修課 (處理 Sheets 各種 TRUE 格式)
@@ -1008,7 +1024,7 @@ function LibraryView({ courses, progress, onStartCourse }) {
   // 🛡️ 安全檢查：如果 courses 還沒抓到，先顯示載入中
   if (!courses || courses.length === 0) {
     return (
-      <div className="text-center py-20 text-slate-400 font-bold animate-pulse">
+      <div className="text-center py-20 text-slate-500 font-bold animate-pulse">
         正在開啟雲端圖書館...
       </div>
     );
@@ -1067,7 +1083,7 @@ function LibraryView({ courses, progress, onStartCourse }) {
               /* 🚧 空頻道：內容還沒上架，顯示製作中而不是留白或直接消失 */
               <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 py-14 text-center">
                 <Icon className={`w-8 h-8 mx-auto mb-3 ${config.color} opacity-40`} />
-                <p className="text-slate-400 font-bold">內容製作中，敬請期待</p>
+                <p className="text-slate-500 font-bold">內容製作中，敬請期待</p>
               </div>
             ) : (
               <>
@@ -1126,7 +1142,7 @@ function CourseCard({ course, isCompleted, onClick }) {
             <span className="text-[10px] bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.5 rounded font-bold">必修</span>
           )}
           <div className="flex items-center text-slate-500 text-sm font-medium bg-slate-50 px-2 py-1 rounded-md">
-            <Cloud className="w-3.5 h-3.5 mr-1 text-slate-400" /> {course.duration}
+            <Cloud className="w-3.5 h-3.5 mr-1 text-slate-500" /> {course.duration}
           </div>
         </div>
       </div>
@@ -1141,7 +1157,7 @@ function CourseCard({ course, isCompleted, onClick }) {
 
       <div className="mt-auto pt-4 border-t border-slate-100 flex justify-between items-center">
         <div>
-          <div className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">可解鎖成就</div>
+          <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">可解鎖成就</div>
           <div className="flex flex-wrap gap-2">
             {course.badges.map(badge => (
               <span key={badge} className="px-2.5 py-1 bg-slate-100 text-slate-600 border-slate-200 border text-xs font-bold rounded-lg">
@@ -1163,7 +1179,7 @@ function CourseCard({ course, isCompleted, onClick }) {
 
 function AchievementView({ progress, courses }) {
   // 🛡️ 防呆：確保資料存在
-  if (!courses || !progress) return <div className="p-10 text-center text-slate-400 font-bold">成就資料同步中...</div>;
+  if (!courses || !progress) return <div className="p-10 text-center text-slate-500 font-bold">成就資料同步中...</div>;
 
   // 1️⃣ 核心邏輯：計算「職能掌握度」
   const skillStats = React.useMemo(() => {
@@ -1303,12 +1319,12 @@ function AchievementView({ progress, courses }) {
                 <div className={`w-14 h-14 rounded-full flex items-center justify-center mb-4 ${
                   isEarned ? 'bg-gradient-to-br from-blue-50 to-indigo-50' : 'bg-slate-100'
                 }`}>
-                  <Award className={`w-7 h-7 ${isEarned ? 'text-blue-600' : 'text-slate-400'}`} />
+                  <Award className={`w-7 h-7 ${isEarned ? 'text-blue-600' : 'text-slate-500'}`} />
                 </div>
-                <span className={`font-black text-xs ${isEarned ? 'text-slate-800' : 'text-slate-400'}`}>
+                <span className={`font-black text-xs ${isEarned ? 'text-slate-800' : 'text-slate-500'}`}>
                   {skill.label}
                 </span>
-                <span className={`text-[10px] mt-1 font-bold ${isEarned ? 'text-blue-500' : 'text-slate-400'}`}>
+                <span className={`text-[10px] mt-1 font-bold ${isEarned ? 'text-blue-500' : 'text-slate-500'}`}>
                   {isEarned ? 'MASTERED' : 'LOCKED'}
                 </span>
               </div>
@@ -1497,10 +1513,10 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-bold rounded">待審核</span>
-                    <span className="text-xs font-mono text-slate-400">{task.taskId || task.TaskId}</span>
+                    <span className="text-xs font-mono text-slate-500">{task.taskId || task.TaskId}</span>
                   </div>
                   <p className="font-semibold text-slate-800">
-                    {task.userName || task.UserId} <span className="text-slate-400 font-normal text-sm">（{task.userId || task.UserId}）</span>
+                    {task.userName || task.UserId} <span className="text-slate-500 font-normal text-sm">（{task.userId || task.UserId}）</span>
                   </p>
                   <p className="text-sm text-slate-500 mt-0.5">{task.courseTitle || task.CourseId}</p>
                   <a href={task.ojtFileUrl || task.OjtFileUrl} target="_blank" rel="noreferrer"
@@ -1523,9 +1539,9 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
       {/* ── Tab 2: 部門學習狀況 ── */}
       {!isLoading && activeTab === 'report' && (
         !selectedDept ? (
-          <p className="text-slate-400 text-center py-12">請先選擇部門</p>
+          <p className="text-slate-500 text-center py-12">請先選擇部門</p>
         ) : !deptReport ? (
-          <p className="text-slate-400 text-center py-12">無資料</p>
+          <p className="text-slate-500 text-center py-12">無資料</p>
         ) : (
           <div className="space-y-6">
             {/* 摘要卡片 */}
@@ -1537,8 +1553,8 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
                   color: deptReport.overallMandatoryRate >= 80 ? 'text-emerald-600' : deptReport.overallMandatoryRate >= 50 ? 'text-amber-600' : 'text-red-600' },
               ].map(card => (
                 <div key={card.label} className="bg-white border border-slate-200 rounded-2xl p-4 text-center">
-                  <p className="text-xs text-slate-400 mb-1">{card.label}</p>
-                  <p className={`text-3xl font-extrabold ${card.color || 'text-slate-800'}`}>{card.value}<span className="text-base font-normal text-slate-400 ml-1">{card.unit}</span></p>
+                  <p className="text-xs text-slate-500 mb-1">{card.label}</p>
+                  <p className={`text-3xl font-extrabold ${card.color || 'text-slate-800'}`}>{card.value}<span className="text-base font-normal text-slate-500 ml-1">{card.unit}</span></p>
                 </div>
               ))}
             </div>
@@ -1574,7 +1590,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
                   <div key={emp.userId} className="px-5 py-4">
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <p className="font-semibold text-slate-800">{emp.name} <span className="text-xs text-slate-400 font-normal">{emp.userId}</span></p>
+                        <p className="font-semibold text-slate-800">{emp.name} <span className="text-xs text-slate-500 font-normal">{emp.userId}</span></p>
                         <p className="text-sm text-slate-500 mt-0.5">
                           已完成 {emp.completedCount}/{emp.totalCourses} 門｜必修 {emp.mandatoryCompleted}/{emp.mandatoryTotal} 門
                         </p>
@@ -1603,16 +1619,16 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
       {/* ── Tab 3: 必修課設定 ── */}
       {!isLoading && activeTab === 'settings' && (
         !selectedDept ? (
-          <p className="text-slate-400 text-center py-12">請先選擇部門</p>
+          <p className="text-slate-500 text-center py-12">請先選擇部門</p>
         ) : (
           <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-700">設定「{selectedDept}」部門必修課</h3>
-              <p className="text-xs text-slate-400 mt-1">全域必修課已固定，這裡只能設定部門加選的必修課程</p>
+              <p className="text-xs text-slate-500 mt-1">全域必修課已固定，這裡只能設定部門加選的必修課程</p>
             </div>
             <div className="divide-y divide-slate-100">
               {(courses || []).filter(c => !(c.isMandatory && !deptMandatory.has(c.id))).length === 0 && (
-                <p className="text-slate-400 text-center py-8 text-sm">無課程可設定</p>
+                <p className="text-slate-500 text-center py-8 text-sm">無課程可設定</p>
               )}
               {(courses || []).map(c => {
                 const courseId = c.id || c.CourseId;
@@ -1625,7 +1641,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
                   <div key={courseId} className="px-5 py-3.5 flex items-center justify-between gap-4">
                     <div>
                       <p className="font-medium text-slate-700 text-sm">{c.title}</p>
-                      <p className="text-xs text-slate-400">{c.category}</p>
+                      <p className="text-xs text-slate-500">{c.category}</p>
                     </div>
                     {isGlobalMandatory ? (
                       <span className="px-2.5 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-lg whitespace-nowrap">全域必修</span>
@@ -1811,6 +1827,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
                 if (!isThisCourseNowPlaying) { handlePlayAudio(); return; }
                 isAudioPlaying ? globalAudio.pause() : globalAudio.play();
               }}
+              aria-label={isThisCourseNowPlaying && isAudioPlaying ? '暫停' : '播放'}
               className="w-14 h-14 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center shadow-lg hover:bg-amber-300 transition-all"
             >
               {isThisCourseNowPlaying && isAudioPlaying
@@ -1819,13 +1836,13 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
             </button>
             <div className="text-white">
               <p className="font-black text-base">{safeCourse.title}</p>
-              <p className="text-slate-400 text-xs mt-0.5">
+              <p className="text-slate-500 text-xs mt-0.5">
                 {isThisCourseNowPlaying && isAudioPlaying ? '播放中 — 可切換頁面背景聆聽' : '點擊播放'}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-xs font-bold mr-1">播放速度</span>
+            <span className="text-slate-500 text-xs font-bold mr-1">播放速度</span>
             {SPEED_OPTIONS.map(s => (
               <button key={s} onClick={() => handleSpeedChange(s)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
@@ -1855,7 +1872,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
           >
             前往學習地圖 <ExternalLink className="w-4 h-4" />
           </a>
-          <p className="text-slate-400 text-xs">看完後,回來下方完成小測驗即可完課</p>
+          <p className="text-slate-500 text-xs">看完後,回來下方完成小測驗即可完課</p>
         </div>
       );
     }
@@ -1907,7 +1924,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
 <div className="mb-10">
   {/* 💡 強化判定：確保內容不是空的，也不是空的 JSON 陣列 */}
   {detailLoading ? (
-    <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold animate-pulse">
+    <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 text-center text-slate-500 font-bold animate-pulse">
       載入課程內容中...
     </div>
   ) : detail?.AiSummary && String(detail.AiSummary).trim() !== "" && detail.AiSummary !== "[]" ? (
@@ -1931,7 +1948,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
                 </div>
               ));
             }
-            return <p className="text-slate-400 italic text-sm">摘要內容格式有誤</p>;
+            return <p className="text-slate-500 italic text-sm">摘要內容格式有誤</p>;
           } catch (e) {
             // 如果不是 JSON，則嘗試直接顯示文字內容
             return <p className="text-slate-700 p-2">{detail.AiSummary}</p>;
@@ -1971,7 +1988,7 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
               {/* 🥇 第一順位：隨堂測驗 */}
               <button 
                 onClick={() => setActiveTab('quiz')} 
-                className={`p-4 text-sm font-bold flex-1 transition-colors ${activeTab === 'quiz' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100/50'}`}
+                className={`p-4 text-sm font-bold flex-1 transition-colors ${activeTab === 'quiz' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-600 hover:bg-slate-100/50'}`}
               >
                 隨堂測驗
               </button>
@@ -1980,15 +1997,15 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
               {course.ojtRequired && (
                 <button 
                   onClick={() => setActiveTab('ojt')} 
-                  className={`p-4 text-sm font-bold flex-1 transition-colors ${activeTab === 'ojt' ? 'bg-white text-amber-600 border-b-2 border-amber-600' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100/50'}`}
+                  className={`p-4 text-sm font-bold flex-1 transition-colors ${activeTab === 'ojt' ? 'bg-white text-amber-600 border-b-2 border-amber-600' : 'text-slate-500 hover:text-slate-600 hover:bg-slate-100/50'}`}
                 >
                   實戰任務 (OJT)
                 </button>
               )}
 
               {/* 🥉 隱藏區：未來講義跟逐字稿做好了，把註解拿掉就會出現了 */}
-              {/* <button onClick={() => setActiveTab('summary')} className={`p-4 text-sm font-bold flex-1 ${activeTab === 'summary' ? 'bg-white text-blue-600' : 'text-slate-400'}`}>重點講義</button>
-              <button onClick={() => setActiveTab('transcript')} className={`p-4 text-sm font-bold flex-1 ${activeTab === 'transcript' ? 'bg-white text-blue-600' : 'text-slate-400'}`}>逐字稿</button>
+              {/* <button onClick={() => setActiveTab('summary')} className={`p-4 text-sm font-bold flex-1 ${activeTab === 'summary' ? 'bg-white text-blue-600' : 'text-slate-500'}`}>重點講義</button>
+              <button onClick={() => setActiveTab('transcript')} className={`p-4 text-sm font-bold flex-1 ${activeTab === 'transcript' ? 'bg-white text-blue-600' : 'text-slate-500'}`}>逐字稿</button>
               */}
             </div>
 
@@ -2034,11 +2051,11 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
           <h3 className="font-black text-slate-800 mb-6 text-lg">課程資訊</h3>
           <div className="space-y-6">
               <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-400 font-bold">預估時長</span>
+                <span className="text-slate-500 font-bold">預估時長</span>
                 <span className="text-slate-800 font-black">{safeCourse.duration} 分鐘</span>
               </div>
               <div className="pt-4 border-t border-slate-100">
-                <span className="text-xs font-bold text-slate-400 block mb-3 uppercase tracking-widest">完課獲得徽章</span>
+                <span className="text-xs font-bold text-slate-500 block mb-3 uppercase tracking-widest">完課獲得徽章</span>
                 <div className="flex flex-wrap gap-2">
                   {safeCourse.badges.map(badge => (
                      <span key={badge} className="px-2 py-1 bg-blue-50 text-blue-600 text-[10px] font-bold rounded-lg border border-blue-100">#{badge}</span>
@@ -2118,7 +2135,7 @@ function QuizSection({ course, quiz, isLoading, onSubmit, isAlreadyPassed, badge
 
   // --- 畫面渲染 ---
   if (isLoading) {
-    return <div className="text-center py-10 text-slate-400 font-bold bg-slate-50 rounded-2xl animate-pulse">載入測驗題目中...</div>;
+    return <div className="text-center py-10 text-slate-500 font-bold bg-slate-50 rounded-2xl animate-pulse">載入測驗題目中...</div>;
   }
 
   if (isAlreadyPassed || (submitted && score === 100)) {
@@ -2146,7 +2163,7 @@ function QuizSection({ course, quiz, isLoading, onSubmit, isAlreadyPassed, badge
     );
   }
 
-  if (!hasQuiz) return <div className="text-center py-10 text-slate-400 font-bold bg-slate-50 rounded-2xl">本課程暫無測驗題目。</div>;
+  if (!hasQuiz) return <div className="text-center py-10 text-slate-500 font-bold bg-slate-50 rounded-2xl">本課程暫無測驗題目。</div>;
 
   return (
     <div className="space-y-8 animate-fade-in">

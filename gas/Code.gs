@@ -34,7 +34,8 @@ const SHEET_NAMES = {
   PROGRESS:       'Progress',
   USER_PROGRESS:  'UserProgress',
   OJT_TASKS:      'OJT_Tasks',
-  DEPT_MANDATORY: 'DeptMandatory'
+  DEPT_MANDATORY: 'DeptMandatory',
+  NOTIFICATION_LOG: 'NotificationLog'
 };
 
 // ============================================================
@@ -96,6 +97,17 @@ function respond(obj) {
 
 function getSheet(name) {
   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+}
+
+// 取得 NotificationLog 表，第一次呼叫時自動建立（含表頭），之後直接沿用既有表
+function _getNotificationLogSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAMES.NOTIFICATION_LOG);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAMES.NOTIFICATION_LOG);
+    sheet.appendRow(['RunAt', 'NotifiedEmployeeCount', 'FailedEmployeeIds', 'FailedManagerDepts', 'Status']);
+  }
+  return sheet;
 }
 
 function safeParseJSON(str, fallback) {
@@ -1403,6 +1415,8 @@ function checkSheetHeaders() {
     [SHEET_NAMES.OJT_TASKS]:      ['TaskId', 'UserId', 'CourseId', 'Status', 'SubmittedAt', 'ApprovedAt', 'OjtFileUrl', 'IsSyncedToBQ'],
     [SHEET_NAMES.DEPT_MANDATORY]: ['DeptId', 'CourseId']
   };
+  // 注意：NotificationLog 不在這裡檢查——它是 checkOverdueAndNotify 第一次執行時
+  // 自動建立的紀錄表，不是使用者維護的資料表，執行前不存在是正常狀態
   // 選填欄位（沒有也不算錯，只是對應功能不會生效）
   const optional = {
     [SHEET_NAMES.COURSES]:        ['DueDate'],
@@ -1969,6 +1983,9 @@ function checkOverdueAndNotify() {
 
   const deptOverdueSummary = {}; // deptId -> [{ name, count }]
   let notifiedCount = 0;
+  const failedEmployeeIds  = [];
+  const failedManagerDepts = [];
+  let runStatus = 'success';
 
   for (let i = 1; i < userRows.length; i++) {
     const row = userRows[i];
@@ -2019,6 +2036,7 @@ function checkOverdueAndNotify() {
         notifiedCount++;
       } catch (err) {
         Logger.log(`寄信失敗（${userId}）：${err.toString()}`);
+        failedEmployeeIds.push(userId);
       }
     }
 
@@ -2050,7 +2068,22 @@ function checkOverdueAndNotify() {
       });
     } catch (err) {
       Logger.log(`寄主管彙總信失敗（${dept}）：${err.toString()}`);
+      failedManagerDepts.push(dept);
     }
+  }
+
+  if (failedEmployeeIds.length > 0 || failedManagerDepts.length > 0) runStatus = 'partial_failure';
+
+  try {
+    _getNotificationLogSheet().appendRow([
+      new Date(),
+      notifiedCount,
+      failedEmployeeIds.join(','),
+      failedManagerDepts.join(','),
+      runStatus
+    ]);
+  } catch (err) {
+    Logger.log(`寫入 NotificationLog 失敗：${err.toString()}`);
   }
 
   Logger.log(`完成逾期檢查，共通知 ${notifiedCount} 位員工。`);
