@@ -890,10 +890,19 @@ function getPendingOJTTasks({ requestUserId, sessionToken } = {}) {
   // Lookup maps
   const userMap = {};
   for (let i = 1; i < userRows.length; i++) {
-    userMap[String(userRows[i][userCols.UserId]).trim()] = { name: userRows[i][userCols.Name], role: userRows[i][userCols.Role] };
+    userMap[String(userRows[i][userCols.UserId]).trim()] = {
+      name: userRows[i][userCols.Name],
+      role: userRows[i][userCols.Role],
+      department: String(userRows[i][userCols.Department] || '').trim()
+    };
   }
   const courseMap = {};
   _getCourseCatalog().forEach(c => { courseMap[c.id] = { title: c.title, category: c.category }; });
+
+  // manager 只能看自己部門的待審清單；admin 不限（跟 getDeptReport / reviewOJTTask 一致）
+  const requester = userMap[String(requestUserId).trim()] || {};
+  const requesterRole = String(requester.role || '').toLowerCase();
+  const requesterDept = requester.department || '';
 
   const tasks = [];
   for (let i = 1; i < ojtRows.length; i++) {
@@ -902,6 +911,8 @@ function getPendingOJTTasks({ requestUserId, sessionToken } = {}) {
 
     const uid = String(r[ojtCols.UserId]).trim();
     const cid = String(r[ojtCols.CourseId]).trim();
+
+    if (requesterRole === 'manager' && (userMap[uid] || {}).department !== requesterDept) continue;
 
     tasks.push({
       rowNumber:     i + 1,
