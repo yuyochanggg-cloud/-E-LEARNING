@@ -105,7 +105,7 @@ function _getNotificationLogSheet() {
   let sheet = ss.getSheetByName(SHEET_NAMES.NOTIFICATION_LOG);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAMES.NOTIFICATION_LOG);
-    sheet.appendRow(['RunAt', 'NotifiedEmployeeCount', 'FailedEmployeeIds', 'FailedManagerDepts', 'Status']);
+    sheet.appendRow(['RunAt', 'NotifiedEmployeeCount', 'FailedEmployeeIds', 'FailedManagerDepts', 'NoEmailEmployeeIds', 'NoEmailManagerDepts', 'Status']);
   }
   return sheet;
 }
@@ -836,42 +836,61 @@ function submitOJT({ userId, courseId, submitType, fileName, mimeType, base64Dat
     return { status: 'error', message: '檔案過大，請上傳 5MB 以內的檔案' };
   }
 
-  const sheet  = getSheet(SHEET_NAMES.OJT_TASKS);
-  const cols   = _colMap(sheet); // 純寫入（appendRow），不需要整表資料，維持單獨查欄位
-  const taskId = `OJT-${courseId}-${userId}-${Date.now()}`;
-  let fileUrl  = '';
+  const sheet = getSheet(SHEET_NAMES.OJT_TASKS);
 
-  if (submitType === 'file' && base64Data) {
-    try {
-      const props    = PropertiesService.getScriptProperties();
-      const folderId = props.getProperty('OJT_FOLDER_ID');
-      const folder   = folderId
-        ? DriveApp.getFolderById(folderId)
-        : DriveApp.getRootFolder();
-
-      const decoded = Utilities.base64Decode(base64Data);
-      const blob    = Utilities.newBlob(decoded, mimeType, fileName);
-      const file    = folder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      fileUrl = file.getUrl();
-    } catch (err) {
-      return { status: 'error', message: '檔案上傳失敗：' + err.toString() };
+  // 防重複送出：同一人同一課程若已經有一筆 pending，不再新增第二筆。
+  // 鎖要包住「檢查＋寫入」整段，只鎖檢查那一下沒有用——兩個幾乎同時
+  // 進來的請求會都通過檢查、都各自寫一筆，鎖等於沒鎖。
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const { cols: checkCols, rows: checkRows } = _readSheet(sheet);
+    for (let i = 1; i < checkRows.length; i++) {
+      if (String(checkRows[i][checkCols.UserId]).trim() === String(userId).trim()
+        && String(checkRows[i][checkCols.CourseId]).trim() === String(courseId).trim()
+        && String(checkRows[i][checkCols.Status]).trim() === 'pending') {
+        return { status: 'error', message: '已經有一筆提交在等待審核，請勿重複送出' };
+      }
     }
-  } else if (submitType === 'link') {
-    fileUrl = linkUrl || '';
-  }
 
-  sheet.appendRow(_buildRow(cols, {
-    TaskId: taskId,
-    UserId: String(userId),
-    CourseId: String(courseId),
-    Status: 'pending',
-    SubmittedAt: new Date(),
-    ApprovedAt: '',
-    OjtFileUrl: fileUrl,
-    IsSyncedToBQ: false
-  }));
-  return { status: 'success' };
+    const cols   = _colMap(sheet); // 純寫入（appendRow），不需要整表資料，維持單獨查欄位
+    const taskId = `OJT-${courseId}-${userId}-${Date.now()}`;
+    let fileUrl  = '';
+
+    if (submitType === 'file' && base64Data) {
+      try {
+        const props    = PropertiesService.getScriptProperties();
+        const folderId = props.getProperty('OJT_FOLDER_ID');
+        const folder   = folderId
+          ? DriveApp.getFolderById(folderId)
+          : DriveApp.getRootFolder();
+
+        const decoded = Utilities.base64Decode(base64Data);
+        const blob    = Utilities.newBlob(decoded, mimeType, fileName);
+        const file    = folder.createFile(blob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        fileUrl = file.getUrl();
+      } catch (err) {
+        return { status: 'error', message: '檔案上傳失敗：' + err.toString() };
+      }
+    } else if (submitType === 'link') {
+      fileUrl = linkUrl || '';
+    }
+
+    sheet.appendRow(_buildRow(cols, {
+      TaskId: taskId,
+      UserId: String(userId),
+      CourseId: String(courseId),
+      Status: 'pending',
+      SubmittedAt: new Date(),
+      ApprovedAt: '',
+      OjtFileUrl: fileUrl,
+      IsSyncedToBQ: false
+    }));
+    return { status: 'success' };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ============================================================
@@ -1994,8 +2013,10 @@ function checkOverdueAndNotify() {
 
   const deptOverdueSummary = {}; // deptId -> [{ name, count }]
   let notifiedCount = 0;
-  const failedEmployeeIds  = [];
-  const failedManagerDepts = [];
+  const failedEmployeeIds   = [];
+  const noEmailEmployeeIds  = [];
+  const failedManagerDepts  = [];
+  const noEmailManagerDepts = [];
   let runStatus = 'success';
 
   for (let i = 1; i < userRows.length; i++) {
@@ -2049,6 +2070,9 @@ function checkOverdueAndNotify() {
         Logger.log(`寄信失敗（${userId}）：${err.toString()}`);
         failedEmployeeIds.push(userId);
       }
+    } else {
+      Logger.log(`沒有 Email，無法通知（${userId}）`);
+      noEmailEmployeeIds.push(userId);
     }
 
     if (dept) {
@@ -2066,7 +2090,13 @@ function checkOverdueAndNotify() {
     const dept  = String(row[userCols.Department] || '').trim();
     const email = row[userCols.Email];
     const overdueList = deptOverdueSummary[dept];
-    if (!overdueList || overdueList.length === 0 || !email) continue;
+    if (!overdueList || overdueList.length === 0) continue;
+
+    if (!email) {
+      Logger.log(`主管沒有 Email，無法寄彙總信（${dept}）`);
+      noEmailManagerDepts.push(dept);
+      continue;
+    }
 
     const body = overdueList.map(o =>
       `・${o.name}：\n` + o.titles.map(t => `    - ${t}`).join('\n')
@@ -2083,7 +2113,8 @@ function checkOverdueAndNotify() {
     }
   }
 
-  if (failedEmployeeIds.length > 0 || failedManagerDepts.length > 0) runStatus = 'partial_failure';
+  if (failedEmployeeIds.length > 0 || failedManagerDepts.length > 0
+    || noEmailEmployeeIds.length > 0 || noEmailManagerDepts.length > 0) runStatus = 'partial_failure';
 
   try {
     _getNotificationLogSheet().appendRow([
@@ -2091,6 +2122,8 @@ function checkOverdueAndNotify() {
       notifiedCount,
       failedEmployeeIds.join(','),
       failedManagerDepts.join(','),
+      noEmailEmployeeIds.join(','),
+      noEmailManagerDepts.join(','),
       runStatus
     ]);
   } catch (err) {
