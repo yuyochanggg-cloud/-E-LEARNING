@@ -177,6 +177,8 @@ export default function App() {
   const [loginInput, setLoginInput] = useState('');
   const [passwordInput, setPasswordInput] = useState(''); // ✨ 新增：密碼狀態     
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isSlowLogin, setIsSlowLogin] = useState(false); // 登入超過2.5秒才顯示「大家都在搶登入」的訊息，不要一開始就講
+  const slowLoginTimerRef = useRef(null);
   const [loginError, setLoginError] = useState('');     
 
   const [isFirstLoginMode, setIsFirstLoginMode] = useState(false); // ✨ 新增：控制是否顯示強制換密碼畫面
@@ -339,12 +341,14 @@ const handleCourseComplete = async (badges) => {
 
     try {
       setIsLoggingIn(true);
+      setIsSlowLogin(false);
       setLoginError('');
-      
+      slowLoginTimerRef.current = setTimeout(() => setIsSlowLogin(true), 2500);
+
       // 👇👇👇 CTO 關鍵開刀位置：注意括號的位置！ 👇👇👇
-      const response = await gasClient.post('verifyLogin', { 
+      const response = await gasClient.post('verifyLogin', {
         userId: loginInput.trim(),
-        password: passwordInput.trim() 
+        password: passwordInput.trim()
       });
       // 👆👆👆 已經將 action 獨立為第一個參數 👆👆👆
 
@@ -372,7 +376,9 @@ const handleCourseComplete = async (badges) => {
       console.error("【登入當機】:", error);
       setLoginError('伺服器連線失敗，請稍後再試。');
     } finally {
+      clearTimeout(slowLoginTimerRef.current);
       setIsLoggingIn(false);
+      setIsSlowLogin(false);
     }
   };
 
@@ -668,7 +674,7 @@ const handleCourseComplete = async (badges) => {
                 isFirstLoginMode ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-md transform hover:-translate-y-0.5'}`}
             >
               {isLoggingIn ? (
-                <><div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div> 處理中...</>
+                <><div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2 flex-shrink-0"></div> {isSlowLogin ? '現在同時上線的人有點多⋯（大家真認真！）稍等一下喔' : '處理中...'}</>
               ) : (
                 isFirstLoginMode ? '確認修改並進入學院' : <>登入驗證 <ChevronLeft className="w-5 h-5 ml-1 rotate-180 group-hover:translate-x-1 transition-transform" /></>
               )}
