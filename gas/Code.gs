@@ -81,7 +81,10 @@ function doPost(e) {
     return respond(handlers[action](payload));
 
   } catch (err) {
-    return respond({ status: 'error', message: err.toString() });
+    // 不把原始錯誤內容（可能含欄位名稱、內部邏輯線索）回傳給前端——
+    // 這是公開、無驗證門檻就能打的 endpoint。實際錯誤內容留在後端查。
+    Logger.log('doPost 未預期錯誤：' + err.toString());
+    return respond({ status: 'error', message: '系統發生錯誤，請稍後再試' });
   }
 }
 
@@ -165,8 +168,23 @@ function _colMap(sheet) {
 // _colMap(sheet) 再呼叫一次 sheet.getDataRange().getValues()——那樣同一
 //張表會被讀兩次，每個請求會多出等同於表數的 API 往返時間。
 // ------------------------------------------------------------
+// 多人同時打 API 時，Google Sheets 偶爾會丟出瞬時配額類錯誤（例如
+// "Service invoked too many times"），重試一次通常就過了。這裡包一層
+// 輕量重試，所有讀整表的地方都共用同一個底層，不用每個呼叫點各自處理。
+function _getDataRangeWithRetry(sheet) {
+  const delaysMs = [300, 800];
+  for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+    try {
+      return sheet.getDataRange().getValues();
+    } catch (err) {
+      if (attempt === delaysMs.length) throw err; // 重試用完了，把最後一次的錯誤丟出去
+      Utilities.sleep(delaysMs[attempt]);
+    }
+  }
+}
+
 function _readSheet(sheet) {
-  const rows = sheet.getDataRange().getValues();
+  const rows = _getDataRangeWithRetry(sheet);
   const cols = {};
   (rows[0] || []).forEach((h, i) => { if (h) cols[_normalizeHeader(h)] = i; });
   return { cols, rows };
@@ -335,8 +353,11 @@ function verifyLogin({ userId, password }) {
     }
     _clearLoginFailures(uid);
 
-    // 更新最後登入時間
-    sheet.getRange(i + 1, cols.LastLogin + 1).setValue(new Date());
+    // 更新最後登入時間：不在登入當下直接寫 Sheet。多人幾乎同時登入時，
+    // 每個請求各自對同一份 Users 表發一次同步寫入，會撞上 Google 文件層級
+    // 的寫入配額而失敗（30人同時登入實測：9/30回傳配額錯誤）。改成先放進
+    // CacheService 佇列，由 flushPendingLastLogins() 排程批次、依序寫回。
+    _queueLastLoginUpdate(r[cols.UserId]);
 
     const sessionToken = _generateSessionToken(r[cols.UserId]);
     return {
@@ -383,7 +404,13 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
     }
 
     const lock = LockService.getScriptLock();
-    lock.waitLock(5000);
+    try {
+      lock.waitLock(5000);
+    } catch (lockErr) {
+      // 5秒內搶不到鎖：不要讓原始例外一路掉進 doPost 的通用 catch，
+      // 給使用者看得懂、可以重試的訊息
+      return { status: 'error', message: '系統忙碌中，請稍後再試一次' };
+    }
     try {
       sheet.getRange(i + 1, cols.Password + 1).setValue(newPassword);
       sheet.getRange(i + 1, cols.IsFirstLogin + 1).setValue(false);
@@ -445,6 +472,42 @@ const COURSE_CATALOG_CACHE_KEY = 'course_catalog_v1';
 
 function _invalidateCourseCache() {
   CacheService.getScriptCache().remove(COURSE_CATALOG_CACHE_KEY);
+}
+
+// ============================================================
+// 通用「整表短時快取」：OJT_Tasks／Progress 是只增不減的紀錄表，
+// getCourses 每次登入都整表讀一次，隨使用量累積會越讀越慢，且多人
+// 同時登入時每個請求各自打一次 Sheets API，容易疊加成尖峰負載。
+// 這裡比照 _getCourseCatalog 的做法，短時間內共用同一份快取結果，
+// 寫入該表的地方（submitOJT／reviewOJTTask／completeCourse）要呼叫
+// _invalidateTableCache 清掉對應快取，避免使用者看到自己剛寫入的
+// 舊資料。TTL 刻意設短（60秒），只為了吸收短時間內的登入尖峰，
+// 不是為了長期省讀取。
+// ============================================================
+const OJT_TASKS_CACHE_KEY = 'ojt_tasks_table_v1';
+const PROGRESS_CACHE_KEY  = 'progress_table_v1';
+const TABLE_CACHE_TTL_SECONDS = 60;
+
+function _getCachedTable(sheetName, cacheKey) {
+  const cache  = CacheService.getScriptCache();
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    const parsed = safeParseJSON(cached, null);
+    if (parsed) return parsed;
+  }
+
+  const data = _readSheet(getSheet(sheetName));
+  try {
+    cache.put(cacheKey, JSON.stringify(data), TABLE_CACHE_TTL_SECONDS);
+  } catch (e) {
+    // 超過 CacheService 單鍵 100KB 上限就不快取，功能不受影響只是比較慢
+    Logger.log(`${sheetName} 表快取失敗（可能過大）：` + e.toString());
+  }
+  return data;
+}
+
+function _invalidateTableCache(cacheKey) {
+  CacheService.getScriptCache().remove(cacheKey);
 }
 
 function _getCourseCatalog() {
@@ -586,8 +649,8 @@ function getCourses({ userId, sessionToken }) {
   if (err) return { status: 'error', message: err };
 
   const catalog = _getCourseCatalog();
-  const { cols: ojtCols,      rows: ojtRows }      = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
-  const { cols: progressCols, rows: progressRows } = _readSheet(getSheet(SHEET_NAMES.PROGRESS));
+  const { cols: ojtCols,      rows: ojtRows }      = _getCachedTable(SHEET_NAMES.OJT_TASKS, OJT_TASKS_CACHE_KEY);
+  const { cols: progressCols, rows: progressRows } = _getCachedTable(SHEET_NAMES.PROGRESS, PROGRESS_CACHE_KEY);
   const { cols: userCols,     rows: userRows }     = _readSheet(getSheet(SHEET_NAMES.USERS));
   const { cols: dmCols,       rows: dmRows }       = _readSheet(getSheet(SHEET_NAMES.DEPT_MANDATORY));
 
@@ -730,6 +793,7 @@ function completeCourse({ userId, courseId, badges, isOJT, sessionToken }) {
         Badges: JSON.stringify(badges || []),
         CompletedAt: new Date()
       }));
+      _invalidateTableCache(PROGRESS_CACHE_KEY);
     }
 
     // 同步彙總表：在後端 merge，不讓前端傳整包快照回來覆寫
@@ -887,6 +951,7 @@ function submitOJT({ userId, courseId, submitType, fileName, mimeType, base64Dat
       OjtFileUrl: fileUrl,
       IsSyncedToBQ: false
     }));
+    _invalidateTableCache(OJT_TASKS_CACHE_KEY);
     return { status: 'success' };
   } finally {
     lock.releaseLock();
@@ -1041,6 +1106,7 @@ function reviewOJTTask({ rowNumber, taskId, newStatus, rejectReason, requestUser
         progressSheet.appendRow(_buildRow(progressCols, {
           UserId: userId, CourseId: courseId, Badges: '[]', CompletedAt: new Date()
         }));
+        _invalidateTableCache(PROGRESS_CACHE_KEY);
       }
 
       // 該課程的徽章（從快取的課程目錄拿，不用整表讀 Courses）
@@ -1051,6 +1117,7 @@ function reviewOJTTask({ rowNumber, taskId, newStatus, rejectReason, requestUser
       _mergeUserProgress(userId, { addCourseIds: [courseId], addBadges: badges });
     }
 
+    _invalidateTableCache(OJT_TASKS_CACHE_KEY); // Status/RejectReason/ApprovedAt 一定有改動
     return { success: true, status: 'success' };
   } finally {
     lock.releaseLock();
@@ -2157,4 +2224,72 @@ function setupDailyOverdueTrigger() {
     .create();
 
   Logger.log('已建立每日 09:00 的逾期檢查觸發器。');
+}
+
+// ============================================================
+// [排程函式] LastLogin 批次寫回
+//
+// 用途：verifyLogin 不再登入當下直接寫 Sheet（見該函式註解），改成把
+//       userId+時間先放進 CacheService 佇列，由這支排程函式定時讀出、
+//       一次執行內依序寫回 Users 表。同一個執行序列的循序寫入不會像
+//       多個並發請求那樣互相搶 Google 的文件層級寫入配額。
+//
+// 已知取捨：_queueLastLoginUpdate 的「讀佇列→加一筆→寫回」不是原子操作，
+//       極端情況下兩個幾乎同時登入的請求可能互相覆蓋、其中一筆的
+//       LastLogin 這次沒被記到。LastLogin 只是輔助參考資訊，不是登入
+//       正確性必要欄位，接受這個小機率的遺漏，換取登入本身不再需要
+//       真的對 Sheet 發送同步寫入。
+// ============================================================
+const PENDING_LASTLOGIN_KEY = 'pending_lastlogin_queue_v1';
+
+function _queueLastLoginUpdate(userId) {
+  const cache = CacheService.getScriptCache();
+  const queue = safeParseJSON(cache.get(PENDING_LASTLOGIN_KEY), {});
+  queue[String(userId)] = new Date().toISOString();
+  try {
+    cache.put(PENDING_LASTLOGIN_KEY, JSON.stringify(queue), 3600); // 1小時，遠比排程間隔長，避免異常時整批遺失
+  } catch (e) {
+    Logger.log('LastLogin 佇列寫入失敗：' + e.toString());
+  }
+}
+
+// 使用方式：GAS 編輯器選這個函式，執行一次即可（只需要執行一次）
+//          要取消排程：GAS 編輯器左側「觸發器」（時鐘圖示）手動刪除
+function setupLastLoginFlushTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'flushPendingLastLogins') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+
+  ScriptApp.newTrigger('flushPendingLastLogins')
+    .timeBased()
+    .everyMinutes(10)
+    .create();
+
+  Logger.log('已建立每 10 分鐘的 LastLogin 批次寫入觸發器。');
+}
+
+function flushPendingLastLogins() {
+  const cache = CacheService.getScriptCache();
+  const raw = cache.get(PENDING_LASTLOGIN_KEY);
+  if (!raw) return;
+
+  const queue = safeParseJSON(raw, {});
+  const userIds = Object.keys(queue);
+  if (userIds.length === 0) return;
+
+  cache.remove(PENDING_LASTLOGIN_KEY); // 先清空佇列，避免下次排程重複處理同一批
+
+  const sheet = getSheet(SHEET_NAMES.USERS);
+  const { cols, rows } = _readSheet(sheet);
+  let updated = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const uid = String(rows[i][cols.UserId]).trim();
+    if (queue[uid]) {
+      sheet.getRange(i + 1, cols.LastLogin + 1).setValue(new Date(queue[uid]));
+      updated++;
+    }
+  }
+  Logger.log(`LastLogin 批次寫入完成，共 ${updated} 筆（佇列 ${userIds.length} 筆）。`);
 }
