@@ -8,7 +8,7 @@ import {
   ShieldCheck, Clock, Flame, Sun, Heart, TrendingUp, Gem,
   Cloud, AlertCircle, Info, ExternalLink, Rocket, BatteryCharging,
   Briefcase, Users, Target, Map, UploadCloud, Sparkles, Mic,
-  Lock, Key, Mail, Eye, EyeOff
+  Lock, Key, Mail, Eye, EyeOff, Pin
 } from 'lucide-react';
 
 import { gasClient } from './utils/gasClient';
@@ -895,6 +895,10 @@ function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
   // 2️⃣ 找出選修課
   const electiveCourses = courses.filter(c => !mandatoryCourses.includes(c));
 
+  const pinnedCourses = courses
+    .filter(c => c.pinned === true)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
   // 3️⃣ ✨ 計算完成數量 (直接讀取課程物件的 isCompleted，跟成就頁面完全同步)
   const mandatoryCompleted = mandatoryCourses.filter(c => c.isCompleted).length;
   const mandatoryRate = Math.round((mandatoryCompleted / mandatoryCourses.length) * 100) || 0;
@@ -961,6 +965,25 @@ function DashboardView({ courses, progress, onStartCourse, onViewAll }) {
           </div>
         </div>
       </div>
+
+      {/* 📌 推薦課程：HR 在 Courses 表「置頂」欄填 TRUE 的課，沒有就整區不顯示 */}
+      {pinnedCourses.length > 0 && (
+        <div>
+          <h3 className="text-xl font-bold text-slate-800 flex items-center mb-6">
+            <Pin className="w-5 h-5 mr-2 text-rose-500"/> 推薦課程
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {pinnedCourses.map(course => (
+              <CourseCard
+                key={course.id}
+                course={course}
+                isCompleted={course.isCompleted}
+                onClick={() => onStartCourse(course)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 📍 必修任務包 (核心修正區) */}
       <div>

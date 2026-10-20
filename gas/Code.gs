@@ -140,7 +140,8 @@ const HEADER_ALIASES = {
   '信箱':     'Email',
   '電子郵件': 'Email',
   '建立時間': 'CreatedAt',
-  '新增時間': 'CreatedAt'
+  '新增時間': 'CreatedAt',
+  '置頂':     'Pinned'
 };
 
 function _normalizeHeader(h) {
@@ -468,7 +469,7 @@ function updateNotifyEmail({ userId, email, sessionToken }) {
 //
 // 摘要與題目改由 getCourseDetail 在「點開課程時」才拉，不在清單階段付代價。
 // ============================================================
-const COURSE_CATALOG_CACHE_KEY = 'course_catalog_v1';
+const COURSE_CATALOG_CACHE_KEY = 'course_catalog_v2';
 
 function _invalidateCourseCache() {
   CacheService.getScriptCache().remove(COURSE_CATALOG_CACHE_KEY);
@@ -538,6 +539,7 @@ function _getCourseCatalog() {
       ojtDescription:  r[cols.OjtDescription] || '',
       hasQuiz:         !!r[cols.AiQuiz],
       hasSummary:      !!r[cols.AiSummary],
+      pinned:          r[cols.Pinned] === true || String(r[cols.Pinned]).toUpperCase() === 'TRUE',
       // 沒有 CreatedAt（舊課程、或還沒被 onEdit 蓋過時間）一律當最舊處理，
       // 前端「最新 4 堂」排序時會自然排到後面，不會噴錯或排到最前面。
       createdAt:       r[cols.CreatedAt] ? new Date(r[cols.CreatedAt]).getTime() : 0
@@ -569,6 +571,9 @@ function onEdit(e) {
     const row = e.range.getRow();
     if (row <= 2) return; // 1=標題列，2=範例列
 
+    // 任何課程列的修改（例如勾選置頂）都要讓目錄快取失效，否則最多 5 分鐘後才看得到
+    _invalidateCourseCache();
+
     const cols = _colMap(sheet);
     if (cols.CreatedAt === undefined || cols.Category === undefined) return;
 
@@ -577,7 +582,6 @@ function onEdit(e) {
     if (rowValues[cols.CreatedAt]) return; // 已經蓋過時間，不重複覆寫
 
     sheet.getRange(row, cols.CreatedAt + 1).setValue(new Date());
-    _invalidateCourseCache();
   } catch (err) {
     // 簡易觸發器不能跳錯誤視窗給使用者看，吞掉錯誤避免卡住正常編輯，
     // 有需要診斷時看 Apps Script 的執行紀錄（不是 Logger.log，簡易觸發器
@@ -717,6 +721,8 @@ function getCourses({ userId, sessionToken }) {
     ojtDescription:  c.ojtDescription,
     hasQuiz:         c.hasQuiz,       // 摘要與題目改由 getCourseDetail 取得
     hasSummary:      c.hasSummary,
+    pinned:          c.pinned,
+    createdAt:       c.createdAt,
     isCompleted:     completedSet.has(c.id) || ojtApproved.has(c.id),
     ojtStatus:       ojtApproved.has(c.id) ? 'approved'
                    : ojtPending.has(c.id)  ? 'pending'
