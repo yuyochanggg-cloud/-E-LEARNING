@@ -19,7 +19,10 @@
 // Script Properties（GAS 後台 > 專案設定 > 指令碼屬性）：
 //   VERTEX_PROJECT_ID → Vertex AI 所在的 GCP 專案 ID（此 GAS 專案須已綁定
 //                        standard GCP 專案，且該專案已啟用 Vertex AI API + 帳單）
-//   VERTEX_LOCATION   → Vertex AI region，選填，預設 us-central1
+//   AI_MODEL          → 出題與摘要用的模型，選填，預設 gemini-3.8-flash
+//   AI_LOCATION       → Vertex AI region，選填，預設 global
+//   AI_THINKING_LEVEL → 3.x 模型的思考程度，選填，預設 low
+//   VERTEX_LOCATION   → 只剩 trialQuizTiming／forceVertexAuth_v2 兩個工具函式使用，預設 us-central1
 //   OJT_FOLDER_ID     → OJT 上傳檔案的 Google Drive 資料夾 ID（選填）
 //
 // AI 呼叫改用 Vertex AI（ScriptApp.getOAuthToken()），不再需要 GEMINI_API_KEY。
@@ -92,6 +95,29 @@ function respond(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================================
+// 測試環境（staging）
+// Script Properties 的 APP_ENV=staging 才算測試環境；正式專案不設這個值。
+// 測試環境的信一律改寄 STAGING_MAIL_TO（沒設就不寄），絕不會寄到同事。
+// ============================================================
+function _isStaging() {
+  return PropertiesService.getScriptProperties().getProperty('APP_ENV') === 'staging';
+}
+
+function _sendMail(opts) {
+  if (!_isStaging()) return MailApp.sendEmail(opts);
+  const to = PropertiesService.getScriptProperties().getProperty('STAGING_MAIL_TO');
+  if (!to) {
+    Logger.log('[staging] 沒設定 STAGING_MAIL_TO，略過寄信：' + opts.subject);
+    return;
+  }
+  MailApp.sendEmail(Object.assign({}, opts, {
+    to: to,
+    subject: '[測試環境] ' + opts.subject,
+    body: `（測試環境改寄。原收件人：${opts.to}）\n\n` + opts.body
+  }));
 }
 
 // ============================================================
@@ -1427,20 +1453,47 @@ OJT說明：${ojtDesc}
 // ------------------------------------------------------------
 // 內部：Vertex AI generateContent endpoint
 // ------------------------------------------------------------
-function _vertexEndpoint(model) {
-  const props     = PropertiesService.getScriptProperties();
-  const projectId = props.getProperty('VERTEX_PROJECT_ID');
-  const location  = props.getProperty('VERTEX_LOCATION') || 'us-central1';
+function _vertexEndpoint(model, location) {
+  const projectId = PropertiesService.getScriptProperties().getProperty('VERTEX_PROJECT_ID');
   if (!projectId) throw new Error('未設定 VERTEX_PROJECT_ID（Script Properties）');
-  return `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+  const host = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+  return `https://${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
 }
 
 // ------------------------------------------------------------
-// 內部：帶 retry 的 Vertex AI fetch（OAuth，自動重試 503）
+// 內部：AI 模型設定。預設值寫在這裡，要換模型或回退時改 Script Properties
+// 即可，不用改程式、不用重新部署：
+//   AI_MODEL          預設 gemini-3.8-flash
+//   AI_LOCATION       預設 global（3.8 Flash 在 us-central1 叫不到）
+//   AI_THINKING_LEVEL 預設 low（3.x 系列用；2.5 系列一律關閉思考）
+// 回退舊設定：AI_MODEL=gemini-2.5-flash、AI_LOCATION=us-central1
+// 2026-10-30 依出題試跑（trialQuizTiming）比較四組設定後改用 3.8 Flash 低思考。
+// ------------------------------------------------------------
+function _aiSettings() {
+  const props = PropertiesService.getScriptProperties();
+  return {
+    model:         props.getProperty('AI_MODEL')          || 'gemini-3.8-flash',
+    location:      props.getProperty('AI_LOCATION')       || 'global',
+    thinkingLevel: props.getProperty('AI_THINKING_LEVEL') || 'low'
+  };
+}
+
+// ------------------------------------------------------------
+// 內部：帶 retry 的 Vertex AI fetch（OAuth，自動重試 503／429）
+// 模型與區域來自 _aiSettings()；3.x 系列不能用 thinkingBudget 關閉思考，
+// 這裡統一換成 thinkingLevel，並放寬輸出上限（思考 token 也算在內）。
 // ------------------------------------------------------------
 function _fetchGemini(payload, model) {
-  const url   = _vertexEndpoint(model || 'gemini-2.5-flash');
+  const ai    = _aiSettings();
+  const name  = model || ai.model;
+  const url   = _vertexEndpoint(name, ai.location);
   const token = ScriptApp.getOAuthToken();
+
+  if (!/^gemini-2\.5/.test(name)) {
+    const gc = payload.generationConfig || (payload.generationConfig = {});
+    gc.thinkingConfig  = { thinkingLevel: ai.thinkingLevel };
+    gc.maxOutputTokens = Math.max(gc.maxOutputTokens || 0, 16384);
+  }
 
   for (let i = 0; i < 3; i++) {
     const resp = UrlFetchApp.fetch(url, {
@@ -1450,8 +1503,9 @@ function _fetchGemini(payload, model) {
       payload:     JSON.stringify(payload),
       muteHttpExceptions: true
     });
-    if (resp.getResponseCode() !== 503) return resp;
-    Utilities.sleep(2000);
+    const code = resp.getResponseCode();
+    if (code !== 503 && code !== 429) return resp;
+    Utilities.sleep(2000 * (i + 1));
   }
   throw new Error('Gemini 服務暫時忙碌中，請稍後再試');
 }
@@ -1485,7 +1539,8 @@ function _parseGeminiResponse(response) {
 function testVertexConnection() {
   try {
     Logger.log('專案 ID：' + PropertiesService.getScriptProperties().getProperty('VERTEX_PROJECT_ID'));
-    Logger.log('Region：' + (PropertiesService.getScriptProperties().getProperty('VERTEX_LOCATION') || 'us-central1（預設）'));
+    const ai = _aiSettings();
+    Logger.log('模型：' + ai.model + '｜Region：' + ai.location + '｜思考：' + ai.thinkingLevel);
 
     const response = _fetchGemini({
       contents: [{ role: 'user', parts: [{ text: '請回覆「連線成功」兩個字即可，不要有其他文字。' }] }],
@@ -1497,6 +1552,126 @@ function testVertexConnection() {
   } catch (err) {
     Logger.log('❌ 錯誤：' + err.toString());
   }
+}
+
+// ============================================================
+// [工具函式] trialQuizTiming()
+// 用途：出題計時試跑＋模型比較。對一份「還沒上架」的教材產生摘要 4 條＋
+//       測驗 5 題，只輸出到執行紀錄，不動任何 Sheet 資料，也不會出現在
+//       員工端。每一組設定分別輸出等待秒數與 token 用量（成本揭露用）。
+// 使用方式：改下面 TRIAL 與 RUNS → GAS 編輯器選這個函式執行 → 看「執行紀錄」。
+//   source：Google 文件或 Drive 上 PDF 的網址（要有讀取權限）
+//   RUNS：要比較的設定，一次執行會依序全部跑完；只想跑一組就留一列
+//     model    ：模型 ID（正式平台目前用 gemini-3.8-flash 低思考，見 _aiSettings）
+//     thinking ：false＝跟正式平台一樣關閉思考（僅 2.5 系列可關）；
+//                true＝用模型預設的思考程度；
+//                'low'／'medium'／'high'＝指定思考程度（3.x 系列用，3.8 Flash 最低是 'low'）
+//     location ：留空＝沿用 Script Properties 的 VERTEX_LOCATION；
+//                新模型若回 404，改填 'global' 再試
+// ============================================================
+function trialQuizTiming() {
+  const TRIAL = {
+    source:   'https://drive.google.com/file/d/1NA_2hn374S_pODOEMUgOIyt_hyVURI71/view?usp=drive_link',
+    title:    'gas',
+    category: '效率外掛區'
+  };
+  const RUNS = [
+    { model: 'gemini-2.5-flash', thinking: false, location: '' },
+    { model: 'gemini-2.5-flash', thinking: true,  location: '' },
+    { model: 'gemini-3.8-flash', thinking: 'low', location: 'global' },
+    { model: 'gemini-3.8-flash', thinking: true,  location: 'global' }
+  ];
+
+  const spec = `請輸出 summary 4 條與 quiz 5 題。
+輸出純 JSON（不要有 markdown 或說明文字）：
+{
+  "summary": ["重點1（約50字，直接摘自內容的核心觀念）","重點2",...],
+  "quiz": [
+    {"question":"根據內容設計的情境題","options":["A","B","C","D"],"answer":0},
+    ...
+  ]
+}
+summary 每條必須來自教材內容；quiz 為情境選擇題，answer 為正確選項 index（0-3）。`;
+
+  const isDoc = /docs\.google\.com\/document/.test(TRIAL.source);
+  let parts;
+  if (isDoc) {
+    const text = _getGoogleDocText(TRIAL.source);
+    Logger.log('教材類型：Google 文件，字數 ' + text.length);
+    parts = [{ text: `你是一位企業培訓設計師。以下是一門課程的逐字稿內容。
+
+課程名稱：${TRIAL.title}
+課程分類：${TRIAL.category}
+
+逐字稿：
+${text}
+
+${spec}` }];
+  } else {
+    const match = TRIAL.source.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (!match) throw new Error('無法解析網址：' + TRIAL.source);
+    const blob = DriveApp.getFileById(match[1]).getBlob();
+    Logger.log('教材類型：' + blob.getContentType() + '，' + Math.round(blob.getBytes().length / 1024) + ' KB');
+    parts = [
+      { inlineData: { mimeType: 'application/pdf', data: Utilities.base64Encode(blob.getBytes()) } },
+      { text: `這是一份企業培訓文件（課程：${TRIAL.title}，分類：${TRIAL.category}）。請閱讀全文後輸出。\n\n${spec}` }
+    ];
+  }
+
+  const props     = PropertiesService.getScriptProperties();
+  const projectId = props.getProperty('VERTEX_PROJECT_ID');
+  const letters   = ['A', 'B', 'C', 'D'];
+
+  RUNS.forEach((run, n) => {
+    const location = run.location || props.getProperty('VERTEX_LOCATION') || 'us-central1';
+    const host     = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+    const url      = `https://${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${run.model}:generateContent`;
+    const generationConfig =
+      typeof run.thinking === 'string' ? { temperature: 0.5, maxOutputTokens: 32768, thinkingConfig: { thinkingLevel: run.thinking } }
+      : run.thinking                   ? { temperature: 0.5, maxOutputTokens: 32768 }
+      :                                  { temperature: 0.5, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } };
+
+    const thinkingLabel = typeof run.thinking === 'string' ? run.thinking : (run.thinking ? '預設' : '關');
+    const label = `第 ${n + 1} 組｜${run.model}｜思考${thinkingLabel}｜${location}`;
+    Logger.log('\n==================== ' + label + ' ====================');
+
+    const started  = Date.now();
+    const response = UrlFetchApp.fetch(url, {
+      method:      'post',
+      contentType: 'application/json',
+      headers:     { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      payload:     JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig }),
+      muteHttpExceptions: true
+    });
+    const seconds = ((Date.now() - started) / 1000).toFixed(1);
+
+    if (response.getResponseCode() !== 200) {
+      Logger.log(`❌ HTTP ${response.getResponseCode()}（${seconds} 秒）：` + response.getContentText().substring(0, 300));
+      return;
+    }
+
+    const usage = JSON.parse(response.getContentText()).usageMetadata || {};
+    Logger.log(`AI 等待 ${seconds} 秒`);
+    Logger.log(`token 用量：輸入 ${usage.promptTokenCount}／輸出 ${usage.candidatesTokenCount}／思考 ${usage.thoughtsTokenCount || 0}／合計 ${usage.totalTokenCount}`);
+
+    let result;
+    try {
+      result = _parseGeminiResponse(response);
+    } catch (err) {
+      Logger.log('❌ ' + err.toString());
+      return;
+    }
+
+    const lines = ['', '【重點摘要】'];
+    (result.summary || []).forEach((s, i) => lines.push(`摘要${i + 1}：${s}`));
+    lines.push('', '【測驗】');
+    (result.quiz || []).forEach((q, i) => {
+      lines.push(`題${i + 1}：${q.question}`);
+      (q.options || []).forEach((o, j) => lines.push(`  ${letters[j]}. ${o}`));
+      lines.push(`  正確答案：${letters[q.answer]}`);
+    });
+    Logger.log(lines.join('\n'));
+  });
 }
 
 // ============================================================
@@ -2131,7 +2306,7 @@ function checkOverdueAndNotify() {
 
     if (email) {
       try {
-        MailApp.sendEmail({
+        _sendMail({
           to: email,
           subject: '【良興雲端學院】必修課逾期提醒',
           body: `${name} 您好，\n\n以下必修課程已超過完成期限，請盡快完成：\n\n` +
@@ -2175,7 +2350,7 @@ function checkOverdueAndNotify() {
       `・${o.name}：\n` + o.titles.map(t => `    - ${t}`).join('\n')
     ).join('\n\n');
     try {
-      MailApp.sendEmail({
+      _sendMail({
         to: email,
         subject: `【良興雲端學院】部門必修逾期彙總（${dept}）`,
         body: `以下同仁有必修課逾期未完成：\n\n${body}\n\n請登入主管審核中心查看詳情。`

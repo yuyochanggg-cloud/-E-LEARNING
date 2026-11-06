@@ -64,6 +64,26 @@
 2. 提醒使用者手動在 GAS 編輯器執行一次 `fixInflatedLearningMinutes()`
 3. 視使用者意願處理剩下的 4 項非阻斷無障礙優化，可以小批次做，不用一次做完
 
+## 5.5 測試環境（staging，2026-11-05 建立）—— 改後端一律先走這裡
+
+| 項目 | 位置 |
+|---|---|
+| 測試試算表 | https://drive.google.com/open?id=1IU5uvSFy0BvSIeBLCAgraZaDeFFEIrTjf4QFcTJumtU （測試帳號與密碼在 Users 表，部門都以「測試」開頭） |
+| 測試 GAS 編輯器 | https://script.google.com/d/1ejLAbCrOBDlCJuYmR7rguQScopY_XnpK4FK16H5qo9-Tzj4OoAALYUWp/edit |
+| 測試 GAS 部署 ID | AKfycbw0OtD6zQrut0jtgxqr_Zacsyjj_q8es3V3LOi_5tji6iLWkSQ8RG7hsODo7DqQmuQ9tQ |
+| 隔離機制 | Script Properties `APP_ENV=staging`：所有信改寄 `STAGING_MAIL_TO`（主旨加「[測試環境]」）；OJT 上傳到獨立的 staging 資料夾；前端頂端有橘色「測試環境」標示 |
+
+固定流程：
+1. 改 `gas/Code.gs` → `npm run deploy-gas:staging`（複製 Code.gs＋`gas/staging/Setup.gs` 推到 staging 並更新部署；不碰正式專案）
+2. 前端：本機 `npm run dev:staging`，或 `npm run deploy:staging` 部署成 Vercel 預覽網址（有 Vercel 登入保護）
+3. 用測試帳號走過受影響的流程，並到測試試算表確認資料寫對
+4. 通過後才推正式：clone 正式專案（scriptId `1VsvmCYls0Y-p2YVFeY3y8iaJT3USNGSOeEBVpkT8vAM2wkSJCba72iQu`）→ **先 diff 線上 `程式碼.js` 與本機 Code.gs，不同就停** → 覆蓋後 `clasp push -f` → `clasp create-deployment -i AKfycbxTcxKo...`（既有正式部署 ID）。正式推送一律先問使用者
+
+注意：
+- `gas/staging/Setup.gs` 只推 staging，不要推到正式專案；`gas/staging/appsscript.json` 比正式多一個 `userinfo.email` 權限（Setup 需要）
+- 正式課程複製到測試：staging 的 Script Properties 設 `PROD_SHEET_ID` 後執行 `importCoursesFromProd`（只讀正式表）
+- 正式專案沒有設 `APP_ENV`，`_sendMail` 會照常寄信；**不要在正式專案設 `APP_ENV`**
+
 ## 6. 邊界（不要動的東西）
 
 - 不改密碼儲存邏輯（明碼），因為這是使用者明確做過取捨的決定

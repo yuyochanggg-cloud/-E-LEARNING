@@ -28,3 +28,6 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# staging GAS 推送暫存
+gas/staging/build/

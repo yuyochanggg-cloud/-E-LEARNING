@@ -3,14 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-"homepage": "https://yuyochanggg-cloud.github.io/-E-LEARNING",
+  "homepage": "https://yuyochanggg-cloud.github.io/-E-LEARNING",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist"
+    "predeploy": "npm run build -- --mode github-pages",
+    "deploy": "gh-pages -d dist",
+    "push:staging": "node scripts/push-gas-staging.mjs",
+    "deploy-gas:staging": "node scripts/push-gas-staging.mjs && cd gas/staging && npx @google/clasp create-deployment -i AKfycbw0OtD6zQrut0jtgxqr_Zacsyjj_q8es3V3LOi_5tji6iLWkSQ8RG7hsODo7DqQmuQ9tQ -d staging",
+    "deploy:staging": "vercel deploy --yes --build-env VITE_APP_ENV=staging --build-env VITE_GAS_API_URL=https://script.google.com/macros/s/AKfycbw0OtD6zQrut0jtgxqr_Zacsyjj_q8es3V3LOi_5tji6iLWkSQ8RG7hsODo7DqQmuQ9tQ/exec --build-env VITE_CHAT_WIDGET_URL=https://altatech.ai/widget/ee7pnwndhfawddifdfm5jdt/chat.html",
+    "dev:staging": "vite --mode staging"
   },
   "dependencies": {
     "lucide-react": "^0.577.0",

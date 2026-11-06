@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import { gasClient } from './utils/gasClient';
+import ChatWidget from './ChatWidget';
 
 const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
@@ -828,6 +829,8 @@ const handleCourseComplete = async (badges) => {
           }}
         />
       )}
+
+      <ChatWidget raised={!!nowPlaying && currentView !== 'course'} />
     </div>
     </>
   );
