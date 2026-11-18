@@ -110,7 +110,10 @@
 
 待決（使用者決定）：
 - GitHub repo 為 PUBLIC。改私人會讓 GitHub Pages 正式站失效（免費帳號），要先改用 Vercel 正式站或升級 Pro。已推上去的 48 個 commit 查過沒有個資、密碼、金鑰、分組選品，只有試算表／GAS 的 ID 與 API 網址（無共用權限就打不開），不改寫歷史。**分組與選品在未 push 的 commit 裡，repo 公開期間不要 push。**
-- OJT 上傳：**正式 GAS 沒有設 `OJT_FOLDER_ID`（11/18 查指令碼屬性）→ 檔案存進部署者「我的雲端硬碟」根目錄**，且每個檔設「知道連結的任何人」可看。建議：建專用資料夾＋設 OJT_FOLDER_ID、程式改網域內可看、既有檔依 OJT_Tasks 的 OjtFileUrl 批次改權限（待使用者決定）。
+- OJT 上傳：11/18 前正式 GAS 沒有 `OJT_FOLDER_ID`，檔案存在部署者「我的雲端硬碟」根目錄、每檔「知道連結的任何人」可看。
+  - **11/18 已在正式 GAS 指令碼屬性設定 `OJT_FOLDER_ID`＝「良興雲端學院用」資料夾（1lwIjuLCjUDQRNzJf-AB98AgHZT0hcBPe，擁有者使用者、一般存取＝良興網域知道連結可看）**，新上傳檔會集中到這裡（權限仍由程式設定）。
+  - OJT 連結只出現在「主管審核中心」（店長／管理員）；員工上傳由 GAS 以部署者身分寫入，員工有無公司帳號不影響上傳。
+  - **11/18 定案**：使用者確認審核店長都有公司帳號（部分一般同仁用外部信箱，但他們只上傳、不開連結）→ 新上傳檔改 `DOMAIN_WITH_LINK`（staging `stagingCheckOjtSharing` 通過）。舊檔搬家工具 `previewOjtFileMigration`／`applyOjtFileMigration` 已在 staging 用 `stagingCheckOjtMigration` 實測（公開→網域內、移進資料夾）。**推正式後：先 preview 看數量 → 使用者同意 → apply**；審核者要登入公司 Google 帳號才能看照片。
 - 密碼明碼＋預設生日（既有取捨）：確認 Users 試算表共用名單最少。
 - 低：店長可改他部門必修課（`setDeptMandatory` 未檢查部門）；登入訊息可分辨工號存不存在；可惡意連錯 5 次鎖人 15 分鐘。
 - 未查：正式試算表、OJT 資料夾、GAS 部署、Vercel 的實際共用設定（要後台）。

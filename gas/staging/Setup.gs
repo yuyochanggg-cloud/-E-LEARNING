@@ -325,6 +325,63 @@ function stagingSmokeSecurity() {
   Logger.log(results.some(x => x.indexOf('FAIL') === 0) ? '❌ 有失敗項目' : `✅ 全部 ${results.length} 項通過`);
 }
 
+// OJT 上傳權限測試（只限 staging）：用 T0001 上傳一張 1×1 圖，確認檔案在 OJT_FOLDER_ID 資料夾、權限是「網域內知道連結」；
+// 測完把測試檔丟垃圾桶、刪掉測試列，再跑一次舊檔搬家「預覽」。
+function stagingCheckOjtSharing() {
+  _assertStagingSpreadsheet();
+  const results = [];
+  const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? '：' + extra : ''}`);
+  const tk = _generateSessionToken('T0001');
+  const courseId = 'STG-OJTSHARE-' + Date.now();
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const r = submitOJT({ userId: 'T0001', courseId, submitType: 'file', fileName: 'ojt-share-test.png', mimeType: 'image/png', base64Data: png, sessionToken: tk });
+  check('上傳成功', r.status === 'success', r.message);
+  const sheet = getSheet(SHEET_NAMES.OJT_TASKS);
+  const { cols, rows } = _readSheet(sheet);
+  let rowNo = -1, url = '';
+  for (let i = rows.length - 1; i >= 1; i--) if (String(rows[i][cols.CourseId]) === courseId) { rowNo = i + 1; url = String(rows[i][cols.OjtFileUrl]); break; }
+  const id = (url.match(/\/d\/([A-Za-z0-9_-]{20,})/) || [])[1];
+  if (id) {
+    const f = DriveApp.getFileById(id);
+    check('權限＝公司網域知道連結可看', f.getSharingAccess() === DriveApp.Access.DOMAIN_WITH_LINK, String(f.getSharingAccess()));
+    const folderId = PropertiesService.getScriptProperties().getProperty('OJT_FOLDER_ID');
+    let inFolder = false; const it = f.getParents(); while (it.hasNext()) if (it.next().getId() === folderId) inFolder = true;
+    check('檔案在 OJT_FOLDER_ID 資料夾', inFolder);
+    f.setTrashed(true);
+  } else {
+    check('找到上傳檔', false, url);
+  }
+  if (rowNo > 0) sheet.deleteRow(rowNo);
+  _invalidateTableCache(OJT_TASKS_CACHE_KEY);
+  Logger.log(results.join('\n'));
+  Logger.log('--- 舊檔搬家預覽 ---');
+  previewOjtFileMigration();
+}
+
+// 舊檔搬家實測（只限 staging）：在「我的雲端硬碟」根目錄造一個公開測試檔＋一筆 OJT 紀錄，
+// 跑 applyOjtFileMigration，確認變成網域內＋移進資料夾，再清掉測試檔與測試列。
+function stagingCheckOjtMigration() {
+  _assertStagingSpreadsheet();
+  const results = [];
+  const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? '：' + extra : ''}`);
+  const f = DriveApp.createFile('ojt-migrate-test.txt', 'staging 搬家測試');
+  f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  const sheet = getSheet(SHEET_NAMES.OJT_TASKS);
+  const courseId = 'STG-OJTMIG-' + Date.now();
+  sheet.appendRow(_buildRow(_colMap(sheet), { TaskId: 'TEST-' + courseId, UserId: 'T0001', CourseId: courseId, Status: 'approved', SubmittedAt: new Date(), OjtFileUrl: f.getUrl() }));
+  applyOjtFileMigration();
+  const g = DriveApp.getFileById(f.getId());
+  const folderId = PropertiesService.getScriptProperties().getProperty('OJT_FOLDER_ID');
+  let inFolder = false; const it = g.getParents(); while (it.hasNext()) if (it.next().getId() === folderId) inFolder = true;
+  check('公開檔 → 網域內', g.getSharingAccess() === DriveApp.Access.DOMAIN_WITH_LINK, String(g.getSharingAccess()));
+  check('移進 OJT 資料夾', inFolder);
+  g.setTrashed(true);
+  const { cols, rows } = _readSheet(sheet);
+  for (let i = rows.length - 1; i >= 1; i--) if (String(rows[i][cols.CourseId]) === courseId) sheet.deleteRow(i + 1);
+  _invalidateTableCache(OJT_TASKS_CACHE_KEY);
+  Logger.log(results.join('\n'));
+}
+
 // staging 測後測「到期開放」用：把後測開放日改成今天（或改回 2027/01/04）
 function stagingPostOpenToday() { _stagingSetPostOpen(Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd')); }
 function stagingPostOpenLater() { _stagingSetPostOpen('2027/01/04'); }

@@ -1013,7 +1013,9 @@ function submitOJT({ userId, courseId, submitType, fileName, mimeType, base64Dat
         const decoded = Utilities.base64Decode(base64Data);
         const blob    = Utilities.newBlob(decoded, mimeType, fileName);
         const file    = folder.createFile(blob);
-        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        // 2026/11/18 資安修正：OJT 多為門市現場照片（可能拍到顧客、單據），
+        // 只開放「公司網域知道連結的人」檢視，審核者需登入公司 Google 帳號。
+        file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
         fileUrl = file.getUrl();
       } catch (err) {
         return { status: 'error', message: '檔案上傳失敗：' + err.toString() };
@@ -1895,6 +1897,46 @@ function fixInflatedLearningMinutes() {
 //   3. 在 GAS 編輯器把下面的 FOLDER_ID 換掉，然後執行此函式
 //   4. 執行後到「執行紀錄」確認哪些有更新、哪些沒對到
 // ============================================================
+
+// ============================================================
+// 維運：舊 OJT 上傳檔搬家（2026/11/18）
+// 依 OJT_Tasks 的 OjtFileUrl 找出檔案，改成「公司網域知道連結可看」並移進 OJT_FOLDER_ID 資料夾。
+// 先執行 previewOjtFileMigration（只讀、列出會改哪些），確認後執行 applyOjtFileMigration。
+// 只處理「我擁有」的檔案；外部連結（submitType=link）與找不到的檔案只列出不動。可重跑。
+// ============================================================
+function previewOjtFileMigration() { _migrateOjtFiles(false); }
+function applyOjtFileMigration()   { _migrateOjtFiles(true); }
+
+function _migrateOjtFiles(apply) {
+  const folderId = PropertiesService.getScriptProperties().getProperty('OJT_FOLDER_ID');
+  if (!folderId) throw new Error('請先在指令碼屬性設定 OJT_FOLDER_ID');
+  const folder = DriveApp.getFolderById(folderId);
+  const me = Session.getEffectiveUser().getEmail();
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
+  const stat = { change: 0, ok: 0, notMine: 0, external: 0, missing: 0 };
+  const seen = {};
+  for (let i = 1; i < rows.length; i++) {
+    const url = String(rows[i][cols.OjtFileUrl] || '').trim();
+    if (!url) continue;
+    const m = url.match(/\/d\/([A-Za-z0-9_-]{20,})/) || url.match(/[?&]id=([A-Za-z0-9_-]{20,})/);
+    if (!m || url.indexOf('google.com') === -1) { stat.external++; continue; }
+    if (seen[m[1]]) continue;
+    seen[m[1]] = true;
+    let file;
+    try { file = DriveApp.getFileById(m[1]); } catch (e) { stat.missing++; Logger.log(`第 ${i + 1} 列：找不到檔案（可能已刪除）`); continue; }
+    if (file.getOwner() && file.getOwner().getEmail() !== me) { stat.notMine++; Logger.log(`第 ${i + 1} 列：不是我擁有的檔案，略過：${file.getName()}`); continue; }
+    const needShare = file.getSharingAccess() === DriveApp.Access.ANYONE_WITH_LINK || file.getSharingAccess() === DriveApp.Access.ANYONE;
+    const inFolder = file.getParents().hasNext() && (function () { const it = file.getParents(); while (it.hasNext()) if (it.next().getId() === folderId) return true; return false; })();
+    if (!needShare && inFolder) { stat.ok++; continue; }
+    stat.change++;
+    Logger.log(`第 ${i + 1} 列：${file.getName()}｜${needShare ? '公開連結→網域內' : '權限已OK'}｜${inFolder ? '已在資料夾' : '移進資料夾'}`);
+    if (apply) {
+      if (needShare) file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+      if (!inFolder) file.moveTo(folder);
+    }
+  }
+  Logger.log(`${apply ? '✅ 已處理' : '（預覽，沒有改動）'}：要改 ${stat.change}、已符合 ${stat.ok}、非我擁有 ${stat.notMine}、外部連結 ${stat.external}、找不到 ${stat.missing}`);
+}
 
 function fixMaterialUrls() {
   const FOLDER_ID = '1rSdkIWVc8I2uqoAzqQVePAxnuarNm-sM';
