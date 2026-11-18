@@ -105,18 +105,20 @@
 5. 部署正式前端（GitHub Pages `npm run deploy`）
 6. 每週在正式編輯器執行 `refreshExperimentSummary` → 看「實驗_檢核」（各店完成率、每週次數、個人 x/16、未完成品項、後測、完課、自主練習）
 
+**2026/11/18 已上正式**：後端正式部署 @56（上一版 @55，退版用 `clasp update-deployment AKfycbxTcxKo... -V 55`）；正式推送方式＝clone 正式專案到暫存資料夾，`程式碼.js`＝Code.gs＋`Experiment.js`＋`FinalData.js`，appsscript.json 沿用正式版。已完成第 2、4、5 步：`setupExperimentSheets` 已跑（門市分派 8 列、品項 64 列自動寫入）、`實驗_設定` 練習網址已填 altatech bot、Courses 第 30–33 列為 EXP-PRE／PRAC／SELF／POST。上線前唯讀檢查：27 堂一般課都有 AiQuiz（資安修正不會讓課完不了）；8 店名稱與 Users 部門一字不差（共 76 人；高雄中華店、高雄時代店不在 VisibleTo）。GitHub Pages 前端 index-CyYxNqgo.js。**未完成**：第 3 步（題目、snapshotParticipants）；正式 appsscript.json 沒有 `userinfo.email`，`previewOjtFileMigration`／`applyParticipantAdjustments` 呼叫 `Session.getEffectiveUser().getEmail()` 會「權限不足」失敗。
+
 效能備註：`getExperimentStatus` 每次讀約 8 張表，`submitPractice` 會算 3 次狀態，staging 單次約 2–4 秒；80 人規模可接受，若門市反映慢再加快取。
 
 注意：日期欄（開始日期、OpenFrom、DueDate）一律在試算表手打，程式以「台北的那一天」解讀；不要用程式寫 Date 物件。
 
 ## 5.7 資安（2026/11/18 檢查與修正）
 
-已修（staging 驗證：`stagingSmokeSecurity` 11 項、`stagingSmokeExperiment` 35 項全過；尚未上正式）：
+已修（staging 驗證：`stagingSmokeSecurity` 11 項、`stagingSmokeExperiment` 35 項全過；2026/11/18 已上正式 @56）：
 - `completeCourse` 不再相信前端：課程要存在且看得到；門市對練課只能走門市對練流程；OJT（OjtRequired 或「實戰解鎖」）只回 `pendingOJT`、不寫入；一般課要 6 小時內 `submitQuiz` 後端算到 100 分（CacheService `quizpass_`）；勳章一律用 Courses 設定。內部寫入改 `_completeCourseRecord`（門市對練也用它）。
 - `updateProgress`：單次最多 120 分、每人每天 480 分。
 
 待決（使用者決定）：
-- GitHub repo 為 PUBLIC。改私人會讓 GitHub Pages 正式站失效（免費帳號），要先改用 Vercel 正式站或升級 Pro。已推上去的 48 個 commit 查過沒有個資、密碼、金鑰、分組選品，只有試算表／GAS 的 ID 與 API 網址（無共用權限就打不開），不改寫歷史。**分組與選品在未 push 的 commit 裡，repo 公開期間不要 push。**
+- GitHub repo 為 PUBLIC。改私人會讓 GitHub Pages 正式站失效（免費帳號），要先改用 Vercel 正式站或升級 Pro。已推上去的 48 個 commit 查過沒有個資、密碼、金鑰、分組選品，只有試算表／GAS 的 ID 與 API 網址（無共用權限就打不開），不改寫歷史。分組與選品已移到 gitignore 的 `gas/seed/FinalData.js`；11/18 push 前掃過：commit 中只有店名（抽籤腳本配對、staging 測試對照），沒有店別×類別、沒有型號、沒有抽籤種子。
 - OJT 上傳：11/18 前正式 GAS 沒有 `OJT_FOLDER_ID`，檔案存在部署者「我的雲端硬碟」根目錄、每檔「知道連結的任何人」可看。
   - **11/18 已在正式 GAS 指令碼屬性設定 `OJT_FOLDER_ID`＝「良興雲端學院用」資料夾（1lwIjuLCjUDQRNzJf-AB98AgHZT0hcBPe，擁有者使用者、一般存取＝良興網域知道連結可看）**，新上傳檔會集中到這裡（權限仍由程式設定）。
   - OJT 連結只出現在「主管審核中心」（店長／管理員）；員工上傳由 GAS 以部署者身分寫入，員工有無公司帳號不影響上傳。
