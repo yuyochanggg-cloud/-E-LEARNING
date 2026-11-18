@@ -88,13 +88,20 @@
 ## 5.6 門市對練實驗（方案 4，2026/11/30 開課、8 週到 2027/01/24）上線清單
 
 規格依 2026/11/16 會議：左側獨立「門市對練」入口；每店受訓 2 類 × 每類 4 品項 × 每品項正式練習 2 次＝16 次；排程（11/17 定案）：每週 2 次可同一天、練滿關到下週一、上週不足只能本週補；某款第 1 次後隔天起第 2 次必出現；空位隨機補新款、兩類平均、員工不自選；每日最多 2 次；員工端前後測都叫「商品知識測驗」、不顯示分數；後測在「16 次練完」或「後測課 OpenFrom」先到者開放；交後測＋16 次都完成才發完課勳章；自主練習另一堂課、不限類別與商品但要填類別＋商品、不計入正式。
-程式：`gas/Experiment.gs`＋`src/Experiment.jsx`（DrillView）。staging 冒煙測試 `stagingSmokeExperiment`（Setup.gs）27 項全過，並用前端實走前測→今日派題→回報→bot→自主練習。
+程式：`gas/Experiment.gs`＋`src/Experiment.jsx`（DrillView）。staging 冒煙測試 `stagingSmokeExperiment`（Setup.gs）42 項全過，並用前端實走前測→今日派題→回報→bot→自主練習。
+
+**11/18 改成兩層（使用者決定：AI 對練會一直存在，實驗與指定品項只是這一期）**：
+- 常駐層「AI 門市對練」＝ EXP-SELF（selfpractice）課：到 OpenFrom 就出現在課程資源庫（職人練功坊）與左側入口，點了進對練頁；內容是 bot＋自主練習紀錄；不算完課、不進儀表板。VisibleTo 決定誰看得到（空白＝全公司）。
+- 本期任務：檔期內（`實驗_設定` 開始日期起 8 週）、有派品項（`實驗_門市分派`）、看得到且已開放 EXP-PRE 的人，對練頁最上面才出現（前測、本週次數、今天的正式練習、品項進度、後測）。檔期結束後只留給「前測做了、後測沒交」的人補後測。前測做完前自主練習先鎖住（避免影響前測）。
+- 檔期外的自主練習「週次」留空，`refreshExperimentSummary` 不算進本期。
+- 下一期換商品或規則：改 `實驗_品項`／`實驗_門市分派`／`實驗_設定`，不必改程式（前後測紀錄目前一人一次，下一期若要再測需另處理）。
+- 前端驗證：預覽站用模擬回應看過 4 種狀態（任務進行中、前測未做、無任務只剩常駐層、未開放）與資源庫卡片／左側入口在開放日前隱藏。
 
 上正式前依序：
 1. 門市分派與選品已定案，放在 **`gas/seed/FinalData.js`（gitignore，不進 GitHub；repo 是公開的，分組與對照類別不能公開）**，原始清單見 Codex 資料夾的定案選品 xlsx。換電腦時要從 xlsx 或舊電腦把這個檔帶過來。使用者還要提供：定稿題目（每類 7 題 × A/B、啟用=TRUE）→`實驗_題目`、正式 bot 網址
 2. 推正式後端（Code.gs＋Experiment.js＋**FinalData.js**，見 5.5 第 4 點；少推 FinalData.js 時分派與品項不會自動填，要手貼）→ 正式編輯器執行 `setupExperimentSheets`（建分頁；`實驗_門市分派`、`實驗_品項` 空的會自動寫入定案資料；`實驗_設定` 預設 開始日期 2026/11/30、總週數 8、每品項次數 2、每日上限 2、每週次數 2、練習網址＝要填 bot 網址）
 3. 題目貼進 `實驗_題目` 後先執行 `checkTestItems`（只讀不寫；檢查標題欄、題號重複、子類名稱、卷別 A/B、題幹與四選項不空白、選項不重複、答案 A–D、啟用 TRUE/FALSE、每類每卷 7 題，問題列出第幾列），通過再 `previewTestForms` → `assignTestForms`；開課當天（或前一天）執行 `snapshotParticipants` 存分組快照（之後調店不改分組；調整請填 `實驗_調整紀錄` 再跑 `applyParticipantAdjustments`，會留原門市／時間／處理人）
-4. Courses 加四列（VisibleTo＝8 店）：EXP-PRE（test、pre、標題「商品知識測驗」）、EXP-PRAC（practice）、EXP-SELF（selfpractice）、EXP-POST（test、post、標題「商品知識測驗」、Badges＝完課勳章名、OpenFrom＝2027/01/18 第 8 週）。這四種類型不會出現在課程資源庫
+4. Courses 加四列（VisibleTo＝8 店；Category＝職人練功坊）：EXP-PRE（test、pre、標題「商品知識測驗」、**OpenFrom＝2026/11/30**）、EXP-PRAC（practice、**OpenFrom＝2026/11/30**）、EXP-SELF（selfpractice、標題「AI 門市對練」、**OpenFrom＝2026/11/30**；這張會出現在資源庫）、EXP-POST（test、post、標題「商品知識測驗」、Badges＝完課勳章名、OpenFrom＝2027/01/18 第 8 週）。**OpenFrom 沒到之前，資源庫卡片、左側入口、測驗與練習 API 全部關閉**，所以可以提前上正式
 5. 部署正式前端（GitHub Pages `npm run deploy`）
 6. 每週在正式編輯器執行 `refreshExperimentSummary` → 看「實驗_檢核」（各店完成率、每週次數、個人 x/16、未完成品項、後測、完課、自主練習）
 

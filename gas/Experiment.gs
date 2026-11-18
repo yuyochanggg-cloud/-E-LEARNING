@@ -379,7 +379,17 @@ function _expContext(userId) {
   const posttestDone = _expTestSubmitted(user.userId, 'post');
   const postOpenFrom = post && post.openFrom ? post.openFrom : 0;
   const posttestOpen = !!post && pretestDone && (state.allDone || (postOpenFrom && now.getTime() >= postOpenFrom));
-  return { user, cfg, now, store, categories, items, state, courses, pre, post, phase, pretestDone, posttestDone, postOpenFrom, posttestOpen };
+  // 常駐層：AI 門市對練＋自主練習紀錄（selfpractice 課；VisibleTo 決定誰看得到、OpenFrom 決定幾號開）
+  const self = courses.find(c => c.materialType === 'selfpractice');
+  const selfOpen = !!self && _expIsOpen(self, now);
+  // 本期任務：有派品項、看得到前測、而且在檔期內；檔期結束後只留給「前測做了、後測還沒交」的人補交後測
+  const eligible = !!store && categories.length > 0 && !!pre && _expIsOpen(pre, now);
+  const hasTask = eligible && (phase === 'running' || (phase === 'ended' && pretestDone && !posttestDone));
+  return { user, cfg, now, store, categories, items, state, courses, pre, post, phase, pretestDone, posttestDone, postOpenFrom, posttestOpen, self, selfOpen, hasTask };
+}
+
+function _expIsOpen(course, now) {
+  return !course.openFrom || now.getTime() >= course.openFrom;
 }
 
 // 後測交了＋16 次都完成 → 後測課完課並發勳章（重複呼叫不會重複寫）
@@ -399,8 +409,18 @@ function getExperimentStatus({ userId, sessionToken }) {
   if (ctx.error) return { status: 'error', message: ctx.error };
   const { user, cfg, state, items } = ctx;
 
-  if (!ctx.store) return { status: 'success', data: { unbound: true } };
-  if (!ctx.categories.length) return { status: 'success', data: { isExperimentStore: false, dept: ctx.store } };
+  // 常駐層：所有看得到 AI 門市對練的人都有
+  const base = {
+    hasTask: ctx.hasTask,
+    selfOpen: ctx.selfOpen,
+    selfOpenDate: ctx.self && ctx.self.openFrom ? _fmtDay(ctx.self.openFrom) : '',
+    selfLocked: ctx.hasTask && !ctx.pretestDone, // 本期任務的前測做完前，先不開放自主練習（避免影響前測）
+    selfTotal: state.selfTotal,
+    selfCategories: _expSelfCategories(),
+    knownProducts: _expKnownProducts().map(p => ({ name: p.name, category: p.category })),
+    botUrl: cfg.botUrl
+  };
+  if (!ctx.hasTask) return { status: 'success', data: base };
 
   const view = it => ({
     id: it.id, name: it.name, category: it.category, guide: it.guide, url: it.url,
@@ -410,8 +430,7 @@ function getExperimentStatus({ userId, sessionToken }) {
   });
   return {
     status: 'success',
-    data: {
-      isExperimentStore: true,
+    data: Object.assign(base, {
       dept: user.dept,
       store: ctx.store,
       phase: ctx.phase,
@@ -441,18 +460,15 @@ function getExperimentStatus({ userId, sessionToken }) {
       completed: ctx.posttestDone && state.allDone,
       badges: ctx.post ? (ctx.post.badges || []) : [],
       today: ctx.phase === 'running' ? state.todayList.map(id => view(items.find(it => it.id === id))) : [],
-      items: items.map(view),
-      selfTotal: state.selfTotal,
-      selfCategories: _expSelfCategories(),
-      knownProducts: _expKnownProducts().map(p => ({ name: p.name, category: p.category })),
-      botUrl: cfg.botUrl
-    }
+      items: items.map(view)
+    })
   };
 }
 
 function _expTestCourse(ctx, courseId) {
   const course = ctx.courses.find(c => c.id === String(courseId).trim());
   if (!course || course.materialType !== 'test') return { error: '找不到測驗' };
+  if (!ctx.hasTask) return { error: '目前沒有進行中的本期任務' };
   if (course.testPhase === 'pre') return { course, phase: 'pre' };
   if (course.testPhase !== 'post') return { error: '測驗設定錯誤（TestPhase 要填 pre 或 post），請洽 HR' };
   if (!ctx.posttestOpen) {
@@ -548,12 +564,10 @@ function submitPractice({ userId, itemId, kind, category, productName, note, ses
   try {
     ctx = _expContext(userId);
     if (ctx.error) return { status: 'error', message: ctx.error };
-    if (!ctx.store) return { status: 'error', message: '你的帳號沒有綁定門市，請聯絡管理者' };
-    if (!ctx.pretestDone) return { status: 'error', message: '請先完成商品知識測驗，才能開始練習' };
-    if (ctx.phase === 'notStarted') return { status: 'error', message: '練習尚未開始，開始日期：' + _fmtDay(ctx.cfg.start) };
-
     let rec;
     if (kind === 'self') {
+      if (!ctx.selfOpen) return { status: 'error', message: 'AI 門市對練目前沒有開放給你' };
+      if (ctx.hasTask && !ctx.pretestDone) return { status: 'error', message: '請先完成本期任務的商品知識測驗，再開始自主練習' };
       const cat = String(category || '').trim();
       const name = String(productName || '').trim().slice(0, 80);
       if (_expSelfCategories().indexOf(cat) === -1) return { status: 'error', message: '請選擇練習的類別' };
@@ -561,6 +575,8 @@ function submitPractice({ userId, itemId, kind, category, productName, note, ses
       const known = _expKnownProducts().find(p => p.name === name);
       rec = { '類型': '自主', '類別': cat, '品項編號': known ? known.code : '', '品項名稱': name };
     } else {
+      if (!ctx.hasTask) return { status: 'error', message: '目前沒有進行中的本期任務' };
+      if (!ctx.pretestDone) return { status: 'error', message: '請先完成商品知識測驗，才能開始練習' };
       const item = ctx.items.find(it => it.id === String(itemId || '').trim());
       if (!item) return { status: 'error', message: '這個品項不在你的正式練習範圍內' };
       if (ctx.phase === 'ended') return { status: 'error', message: '正式練習期間已結束' };
@@ -572,8 +588,9 @@ function submitPractice({ userId, itemId, kind, category, productName, note, ses
     }
 
     _expAppend(EXP_SHEETS.PRACTICE, [Object.assign({
-      '回報時間': ctx.now, '工號': ctx.user.userId, '姓名': ctx.user.name, '門市': ctx.store,
-      '週次': _expWeekNo(ctx.cfg.start, ctx.now), '備註': String(note || '').slice(0, 200)
+      // 週次只在檔期內記（檔期外的自主練習留空，分析時好區分）
+      '回報時間': ctx.now, '工號': ctx.user.userId, '姓名': ctx.user.name, '門市': ctx.store || ctx.user.dept,
+      '週次': ctx.phase === 'running' ? _expWeekNo(ctx.cfg.start, ctx.now) : '', '備註': String(note || '').slice(0, 200)
     }, rec)]);
   } finally {
     lock.releaseLock();
@@ -850,6 +867,7 @@ function refreshExperimentSummary() {
     const p = people[String(pr.rows[i][pr.cols['工號']]).trim()];
     if (!p) continue;
     if (String(pr.rows[i][pr.cols['類型']]).trim() === '自主') {
+      if (!(Number(pr.rows[i][pr.cols['週次']]) >= 1)) continue; // 檔期外的自主練習（週次空白）不算進本期統計
       p.self++;
       const sc = String(pr.rows[i][pr.cols['類別']]).trim();
       if (sc !== EXP_SELF_OTHER && storeCats[p.dept].indexOf(sc) === -1) p.selfCtrl++; // 練到本店的對照類

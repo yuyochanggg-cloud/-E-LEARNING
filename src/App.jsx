@@ -690,9 +690,15 @@ const handleCourseComplete = async (badges) => {
   // ==========================================
   // 6. 登入後主畫面 (Main Render)
   // ==========================================
-  // 門市對練的測驗／練習課只放在「門市對練」頁，不進資源庫與儀表板；看得到這類課的人才有入口
+  // AI 門市對練分兩層：
+  //   常駐的「AI 門市對練」（selfpractice 課）：到了開放日（OpenFrom）就出現在資源庫，點了進對練頁；不算完課、不進儀表板
+  //   本期任務的測驗／正式練習課：不進資源庫與儀表板，只在對練頁裡出現
+  const isOpenCourse = c => !c.openFrom || Date.now() >= c.openFrom;
   const regularCourses = coursesData.filter(c => !EXPERIMENT_TYPES.includes(c.materialType));
-  const hasDrill = regularCourses.length !== coursesData.length;
+  const drillCard = coursesData.find(c => c.materialType === 'selfpractice' && isOpenCourse(c));
+  const libraryCourses = drillCard ? [drillCard, ...regularCourses] : regularCourses;
+  const hasDrill = coursesData.some(c => EXPERIMENT_TYPES.includes(c.materialType) && c.testPhase !== 'post' && isOpenCourse(c));
+  const startCourse = c => navigateTo(EXPERIMENT_TYPES.includes(c.materialType) ? 'drill' : 'course', c);
   return (
     <>
     <Toast />
@@ -745,7 +751,7 @@ const handleCourseComplete = async (badges) => {
           <button onClick={() => navigateTo('dashboard')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><LayoutDashboard className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">學習儀表板</span></button>
           <button onClick={() => navigateTo('library')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'library' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Library className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">課程資源庫</span></button>
           {hasDrill && (
-            <button onClick={() => navigateTo('drill')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'drill' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Dumbbell className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">門市對練</span></button>
+            <button onClick={() => navigateTo('drill')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'drill' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Dumbbell className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">AI 門市對練</span></button>
           )}
           <button onClick={() => navigateTo('achievements')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'achievements' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Award className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">我的成就</span></button>
           
@@ -779,7 +785,7 @@ const handleCourseComplete = async (badges) => {
               {currentView === 'dashboard' && '學習儀表板 (智能引導與個人化路徑)'}
               {currentView === 'library' && '六大頻道資源庫'}
               {currentView === 'achievements' && '六大向度與遊戲化成就'}
-              {currentView === 'drill' && <><Dumbbell className="w-6 h-6 mr-2 text-blue-600"/> 門市對練</>}
+              {currentView === 'drill' && <><Dumbbell className="w-6 h-6 mr-2 text-blue-600"/> AI 門市對練</>}
               {currentView === 'manager' && <><ShieldCheck className="w-6 h-6 mr-2 text-amber-500"/> {userProfile?.role === 'admin' ? '系統管理中心' : '主管審核中心'}</>}
               {currentView === 'course' && <><BookOpen className="w-6 h-6 mr-2 text-blue-600"/> 課程學習區 (提取練習與微學習)</>}
             </h1>
@@ -795,7 +801,7 @@ const handleCourseComplete = async (badges) => {
         <div className="p-4 md:p-8 max-w-7xl mx-auto">
           {/* ⚠️ 確保這些子元件在你的專案中有被 import */}
           {currentView === 'dashboard' && <DashboardView courses={regularCourses} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} onViewAll={() => navigateTo('library')} />}
-          {currentView === 'library' && <LibraryView courses={regularCourses} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} />}
+          {currentView === 'library' && <LibraryView courses={libraryCourses} progress={progressData} onStartCourse={startCourse} />}
           {currentView === 'drill' && <DrillView userId={userProfile?.userId || userProfile?.UserId} onChanged={() => fetchDashboardData(userProfile.userId || userProfile.empId)} />}
           {currentView === 'achievements' && <AchievementView progress={progressData} courses={coursesData} />}
           {currentView === 'manager' && <ManagerDashboard onBack={() => navigateTo('dashboard')} userProfile={userProfile} courses={coursesData} />}
@@ -1161,6 +1167,8 @@ function LibraryView({ courses, progress, onStartCourse }) {
 }
 
 function CourseCard({ course, isCompleted, onClick }) {
+  const isDrill = course.materialType === 'selfpractice';
+  if (isDrill) isCompleted = false;
   const catConfig = categoriesConfig[course.category] || categoriesConfig['初心補給站'];
   const CatIcon = catConfig.icon;
 
@@ -1191,12 +1199,12 @@ function CourseCard({ course, isCompleted, onClick }) {
       </h3>
       
       <p className="text-slate-500 text-sm mb-6 line-clamp-3 flex-grow leading-relaxed font-medium">
-        {course.summary}
+        {isDrill ? '由 AI 扮演顧客，隨時練習介紹商品與應對；練完留下紀錄。有本期任務時，也在這裡進行。' : course.summary}
       </p>
 
       <div className="mt-auto pt-4 border-t border-slate-100 flex justify-between items-center">
         <div>
-          <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">可解鎖成就</div>
+          <div className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">{isDrill ? '隨時都能練' : '可解鎖成就'}</div>
           <div className="flex flex-wrap gap-2">
             {course.badges.map(badge => (
               <span key={badge} className="px-2.5 py-1 bg-slate-100 text-slate-600 border-slate-200 border text-xs font-bold rounded-lg">
@@ -1948,14 +1956,14 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
   };
 
 
-  // 門市對練的課程（例如從舊連結 ?courseId= 進來）一律請員工到左側「門市對練」頁
+  // 門市對練的課程（例如從舊連結 ?courseId= 進來）一律請員工到左側「AI 門市對練」頁
   if (EXPERIMENT_TYPES.includes(safeCourse.materialType)) {
     return (
       <div className="animate-fade-in pb-20 max-w-4xl mx-auto px-4">
         <button onClick={onBack} className="flex items-center text-slate-500 hover:text-blue-600 mb-6 font-bold transition-colors">
           ← 返回資源庫
         </button>
-        <p className="p-5 rounded-2xl border border-blue-200 bg-blue-50 text-blue-800 font-bold">這堂課在左側選單的「門市對練」裡進行。</p>
+        <p className="p-5 rounded-2xl border border-blue-200 bg-blue-50 text-blue-800 font-bold">這堂課在左側選單的「AI 門市對練」裡進行。</p>
       </div>
     );
   }

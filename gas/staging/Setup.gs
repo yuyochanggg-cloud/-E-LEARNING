@@ -166,7 +166,7 @@ function setupExperimentDemo() {
   const demo = [
     { CourseId: 'EXP-PRE',  Title: '商品知識測驗', Category: '職人練功坊', Duration: 25, MaterialType: 'test', TestPhase: 'pre', VisibleTo: stores },
     { CourseId: 'EXP-PRAC', Title: '門市對練｜正式練習', Category: '職人練功坊', Duration: 15, MaterialType: 'practice', VisibleTo: stores },
-    { CourseId: 'EXP-SELF', Title: '門市對練｜自主練習', Category: '職人練功坊', Duration: 15, MaterialType: 'selfpractice', VisibleTo: stores },
+    { CourseId: 'EXP-SELF', Title: 'AI 門市對練', Category: '職人練功坊', Duration: 15, MaterialType: 'selfpractice', VisibleTo: stores },
     { CourseId: 'EXP-POST', Title: '商品知識測驗', Category: '職人練功坊', Duration: 25, MaterialType: 'test', TestPhase: 'post',
       Badges: '門市對練完課', VisibleTo: stores, OpenFrom: '2027/01/04' }
   ];
@@ -195,6 +195,8 @@ function stagingSmokeExperiment() {
   const finCats = store => _expFinal().assign.filter(r => r[0] === (store === '測試三創' ? '三創體驗館' : '中壢中正店'))[0].slice(1).join();
   check('中壢只看到自己的兩類 8 品項', s.items.length === 8 && s.categories.join() === finCats('測試中壢'));
   check('目標 16 次', s.formalTarget === 16);
+  check('本期任務出現（檔期內＋實驗門市）', s.hasTask === true && s.selfOpen === true && s.selfLocked === true);
+  check('前測前不能自主練習', submitPractice({ userId: 'T0004', kind: 'self', category: s.selfCategories[0], productName: 'x', sessionToken: tk }).status === 'error');
   check('前測前不能練', submitPractice({ userId: 'T0004', itemId: s.today[0].id, kind: 'formal', sessionToken: tk }).status === 'error');
   check('前測前後測不開放', getTest({ userId: 'T0004', courseId: 'EXP-POST', sessionToken: tk }).status === 'error');
   check('中壢品項＝定案資料 8 款', s.items.map(i => i.id).join() === finRows('測試中壢').map(r => r[0]).join());
@@ -276,7 +278,22 @@ function stagingSmokeExperiment() {
   // ---- 沒綁門市 ----
   const tk1 = _generateSessionToken('T0001');
   const s1 = getExperimentStatus({ userId: 'T0001', sessionToken: tk1 }).data;
-  check('管理員（非實驗門市）不會開放練習', s1.isExperimentStore === false || s1.unbound === true);
+  check('非參與者沒有本期任務、但有常駐 AI 對練', s1.hasTask === false && s1.selfOpen === true && !s1.items);
+  check('非參與者不能回報正式練習', submitPractice({ userId: 'T0001', itemId: 'x', kind: 'formal', sessionToken: tk1 }).status === 'error');
+  const sr = submitPractice({ userId: 'T0001', kind: 'self', category: s1.selfCategories[4], productName: '每月主推測試', sessionToken: tk1 });
+  check('非參與者可以記錄自主練習', sr.status === 'success' && sr.data.selfTotal === s1.selfTotal + 1);
+
+  // ---- 開放日期還沒到：常駐層與本期任務都關 ----
+  const later = '2099/01/01';
+  _stagingSetOpen('EXP-SELF', later);
+  _stagingSetOpen('EXP-PRE', later);
+  const tk3 = _generateSessionToken('T0003');
+  const s3 = getExperimentStatus({ userId: 'T0003', sessionToken: tk3 }).data;
+  check('開放日前：沒有本期任務、常駐層關閉', s3.hasTask === false && s3.selfOpen === false && s3.selfOpenDate === '2099/01/01');
+  check('開放日前：自主練習被擋', submitPractice({ userId: 'T0003', kind: 'self', category: s3.selfCategories[0], productName: 'x', sessionToken: tk3 }).status === 'error');
+  check('開放日前：測驗被擋', getTest({ userId: 'T0003', courseId: 'EXP-PRE', sessionToken: tk3 }).status === 'error');
+  _stagingSetOpen('EXP-SELF', '');
+  _stagingSetOpen('EXP-PRE', '');
 
   refreshExperimentSummary();
   Logger.log(results.join('\n'));
@@ -385,13 +402,14 @@ function stagingCheckOjtMigration() {
 // staging 測後測「到期開放」用：把後測開放日改成今天（或改回 2027/01/04）
 function stagingPostOpenToday() { _stagingSetPostOpen(Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd')); }
 function stagingPostOpenLater() { _stagingSetPostOpen('2027/01/04'); }
-function _stagingSetPostOpen(v) {
+function _stagingSetPostOpen(v) { _stagingSetOpen('EXP-POST', v); }
+function _stagingSetOpen(courseId, v) {
   _assertStagingSpreadsheet();
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Courses');
   const { cols, rows } = _readSheet(sheet);
-  for (let i = 1; i < rows.length; i++) if (rows[i][cols.CourseId] === 'EXP-POST') sheet.getRange(i + 1, cols.OpenFrom + 1).setValue(v);
+  for (let i = 1; i < rows.length; i++) if (rows[i][cols.CourseId] === courseId) sheet.getRange(i + 1, cols.OpenFrom + 1).setValue(v);
   _invalidateCourseCache();
-  Logger.log('EXP-POST OpenFrom → ' + v);
+  Logger.log(courseId + ' OpenFrom → ' + v);
 }
 
 // 用本機產生的 SeedItems.js 整批取代「實驗_題目」（只在 staging 用；舊題目會被清掉）
