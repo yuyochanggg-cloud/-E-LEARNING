@@ -8,11 +8,11 @@ import {
   ShieldCheck, Clock, Flame, Sun, Heart, TrendingUp, Gem,
   Cloud, AlertCircle, Info, ExternalLink, Rocket, BatteryCharging,
   Briefcase, Users, Target, Map, UploadCloud, Sparkles, Mic,
-  Lock, Key, Mail, Eye, EyeOff, Pin
+  Lock, Key, Mail, Eye, EyeOff, Pin, Dumbbell
 } from 'lucide-react';
 
 import { gasClient } from './utils/gasClient';
-import ChatWidget from './ChatWidget';
+import { DrillView, EXPERIMENT_TYPES } from './Experiment';
 
 const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
@@ -313,7 +313,7 @@ const handleCourseComplete = async (badges) => {
     if (res.success || res.status === 'success') {
       if (res.data) setProgressData(res.data); // 用後端 merge 後的實際結果更新本地
 
-      if (isOJT) {
+      if (isOJT || res.pendingOJT) {
         showToast('測驗關卡通過！請完成實戰成果上傳，待主管核准後徽章才會解鎖。', 'warning');
       } else {
         showToast('恭喜完成課程！完課紀錄與徽章已同步至雲端。', 'success');
@@ -690,6 +690,9 @@ const handleCourseComplete = async (badges) => {
   // ==========================================
   // 6. 登入後主畫面 (Main Render)
   // ==========================================
+  // 門市對練的測驗／練習課只放在「門市對練」頁，不進資源庫與儀表板；看得到這類課的人才有入口
+  const regularCourses = coursesData.filter(c => !EXPERIMENT_TYPES.includes(c.materialType));
+  const hasDrill = regularCourses.length !== coursesData.length;
   return (
     <>
     <Toast />
@@ -741,6 +744,9 @@ const handleCourseComplete = async (badges) => {
           {/* 備註：你原本使用了 <NavItem />，確保這個組件存在，或者直接替換為 button */}
           <button onClick={() => navigateTo('dashboard')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><LayoutDashboard className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">學習儀表板</span></button>
           <button onClick={() => navigateTo('library')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'library' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Library className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">課程資源庫</span></button>
+          {hasDrill && (
+            <button onClick={() => navigateTo('drill')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'drill' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Dumbbell className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">門市對練</span></button>
+          )}
           <button onClick={() => navigateTo('achievements')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'achievements' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Award className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">我的成就</span></button>
           
           {(userProfile?.role === 'manager' || userProfile?.role === 'admin') && (
@@ -773,6 +779,7 @@ const handleCourseComplete = async (badges) => {
               {currentView === 'dashboard' && '學習儀表板 (智能引導與個人化路徑)'}
               {currentView === 'library' && '六大頻道資源庫'}
               {currentView === 'achievements' && '六大向度與遊戲化成就'}
+              {currentView === 'drill' && <><Dumbbell className="w-6 h-6 mr-2 text-blue-600"/> 門市對練</>}
               {currentView === 'manager' && <><ShieldCheck className="w-6 h-6 mr-2 text-amber-500"/> {userProfile?.role === 'admin' ? '系統管理中心' : '主管審核中心'}</>}
               {currentView === 'course' && <><BookOpen className="w-6 h-6 mr-2 text-blue-600"/> 課程學習區 (提取練習與微學習)</>}
             </h1>
@@ -787,8 +794,9 @@ const handleCourseComplete = async (badges) => {
 
         <div className="p-4 md:p-8 max-w-7xl mx-auto">
           {/* ⚠️ 確保這些子元件在你的專案中有被 import */}
-          {currentView === 'dashboard' && <DashboardView courses={coursesData} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} onViewAll={() => navigateTo('library')} />}
-          {currentView === 'library' && <LibraryView courses={coursesData} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} />}
+          {currentView === 'dashboard' && <DashboardView courses={regularCourses} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} onViewAll={() => navigateTo('library')} />}
+          {currentView === 'library' && <LibraryView courses={regularCourses} progress={progressData} onStartCourse={(c) => navigateTo('course', c)} />}
+          {currentView === 'drill' && <DrillView userId={userProfile?.userId || userProfile?.UserId} onChanged={() => fetchDashboardData(userProfile.userId || userProfile.empId)} />}
           {currentView === 'achievements' && <AchievementView progress={progressData} courses={coursesData} />}
           {currentView === 'manager' && <ManagerDashboard onBack={() => navigateTo('dashboard')} userProfile={userProfile} courses={coursesData} />}
 
@@ -830,7 +838,6 @@ const handleCourseComplete = async (badges) => {
         />
       )}
 
-      <ChatWidget raised={!!nowPlaying && currentView !== 'course'} />
     </div>
     </>
   );
@@ -1374,6 +1381,7 @@ function AchievementView({ progress, courses }) {
 function ManagerDashboard({ onBack, userProfile, courses }) {
   const [activeTab, setActiveTab] = useState('ojt');
   const [tasks, setTasks]               = useState([]);
+  const [reviewingId, setReviewingId]   = useState(null); // 審核送出中的 taskId（後端約需 4 秒，期間鎖住按鈕）
   const [deptReport, setDeptReport]     = useState(null);
   const [deptMandatory, setDeptMandatory] = useState(new Set());
   const [departments, setDepartments]   = useState([]);
@@ -1447,19 +1455,30 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
       return;
     }
     // 傳 taskId 讓後端定位，不靠 rowNumber（列號會因插入/刪除列而位移）
-    const res = await gasClient.securePost('reviewOJTTask', {
-      taskId: task.taskId,
-      rowNumber: task.rowNumber,
-      newStatus,
-      rejectReason,
-      requestUserId: userId
-    });
-    if (res.success) {
-      showToast(newStatus === 'approved' ? '已核准！' : '已退回！', newStatus === 'approved' ? 'success' : 'info');
+    // 後端寫入約需 4 秒：期間鎖住按鈕並顯示「審核中」，避免看起來卡住或被重複點擊
+    const id = task.taskId || task.TaskId;
+    setReviewingId(id);
+    try {
+      const res = await gasClient.securePost('reviewOJTTask', {
+        taskId: task.taskId,
+        rowNumber: task.rowNumber,
+        newStatus,
+        rejectReason,
+        requestUserId: userId
+      });
+      if (res.success) {
+        showToast(newStatus === 'approved' ? '已核准！' : '已退回！', newStatus === 'approved' ? 'success' : 'info');
+        setTasks(prev => prev.filter(t => (t.taskId || t.TaskId) !== id)); // 立刻從清單移除，不等重抓
+        fetchPendingTasks();
+      } else {
+        showToast(res.message || '審核失敗', 'error');
+        fetchPendingTasks(); // 可能是別人已經審過了，重抓最新狀態
+      }
+    } catch {
+      showToast('連線異常，請重新整理後確認這筆是否已審核', 'error');
       fetchPendingTasks();
-    } else {
-      showToast(res.message || '審核失敗', 'error');
-      fetchPendingTasks(); // 可能是別人已經審過了，重抓最新狀態
+    } finally {
+      setReviewingId(null);
     }
   }
 
@@ -1557,10 +1576,16 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
                   </a>
                 </div>
                 <div className="flex md:flex-col gap-2 min-w-[110px]">
-                  <button onClick={() => handleReview(task, 'approved')}
-                    className="flex-1 py-2 bg-emerald-500 text-white text-sm font-bold rounded-lg hover:bg-emerald-600">✅ 核准</button>
-                  <button onClick={() => handleReview(task, 'rejected')}
-                    className="flex-1 py-2 border-2 border-slate-200 text-slate-600 text-sm font-bold rounded-lg hover:bg-red-50 hover:text-red-600 hover:border-red-200">❌ 退回</button>
+                  {reviewingId === (task.taskId || task.TaskId) ? (
+                    <div className="flex-1 py-2 text-center text-sm font-bold text-slate-500 animate-pulse" role="status">審核中…</div>
+                  ) : (
+                    <>
+                      <button onClick={() => handleReview(task, 'approved')} disabled={!!reviewingId}
+                        className="flex-1 py-2 bg-emerald-500 text-white text-sm font-bold rounded-lg hover:bg-emerald-600 disabled:opacity-50">✅ 核准</button>
+                      <button onClick={() => handleReview(task, 'rejected')} disabled={!!reviewingId}
+                        className="flex-1 py-2 border-2 border-slate-200 text-slate-600 text-sm font-bold rounded-lg hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-50">❌ 退回</button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -1922,6 +1947,18 @@ function CoursePlayerView({ course, onBack, onComplete, isCompleted, onUpdatePro
     );
   };
 
+
+  // 門市對練的課程（例如從舊連結 ?courseId= 進來）一律請員工到左側「門市對練」頁
+  if (EXPERIMENT_TYPES.includes(safeCourse.materialType)) {
+    return (
+      <div className="animate-fade-in pb-20 max-w-4xl mx-auto px-4">
+        <button onClick={onBack} className="flex items-center text-slate-500 hover:text-blue-600 mb-6 font-bold transition-colors">
+          ← 返回資源庫
+        </button>
+        <p className="p-5 rounded-2xl border border-blue-200 bg-blue-50 text-blue-800 font-bold">這堂課在左側選單的「門市對練」裡進行。</p>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-in pb-20 max-w-5xl mx-auto px-4">

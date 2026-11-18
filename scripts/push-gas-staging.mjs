@@ -1,6 +1,6 @@
-// 把後端推到「測試環境」GAS：gas/Code.gs + gas/staging/Setup.gs + gas/staging/appsscript.json
+// 把後端推到「測試環境」GAS：gas/Code.gs + gas/Experiment.gs + gas/staging/Setup.gs (+ seed) + gas/staging/appsscript.json
 // 用法：npm run push:staging   （只碰 staging 專案，正式專案的推法見 HANDOFF.md）
-import { copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -11,6 +11,13 @@ const build = join(stagingDir, 'build');
 mkdirSync(build, { recursive: true });
 for (const f of readdirSync(build)) rmSync(join(build, f));
 copyFileSync(join(root, 'gas', 'Code.gs'), join(build, 'Code.js'));
+copyFileSync(join(root, 'gas', 'Experiment.gs'), join(build, 'Experiment.js'));
+// 題庫種子（gitignore，只在本機有）：有才推
+const seed = join(stagingDir, 'seed', 'SeedItems.js');
+if (existsSync(seed)) copyFileSync(seed, join(build, 'SeedItems.js'));
+// 門市對練定案資料（gitignore，只在本機有）：有才推
+const finalData = join(root, 'gas', 'seed', 'FinalData.js');
+if (existsSync(finalData)) copyFileSync(finalData, join(build, 'FinalData.js'));
 copyFileSync(join(stagingDir, 'Setup.gs'), join(build, 'Setup.js'));
 copyFileSync(join(stagingDir, 'appsscript.json'), join(build, 'appsscript.json'));
 

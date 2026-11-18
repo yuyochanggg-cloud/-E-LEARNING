@@ -75,6 +75,11 @@ function doPost(e) {
       setDeptMandatory:   setDeptMandatory,
       getDepartments:     getDepartments,
       submitQuiz:         submitQuiz,
+      // 門市對練實驗（Experiment.gs）
+      getExperimentStatus: getExperimentStatus,
+      getTest:             getTest,
+      submitTest:          submitTest,
+      submitPractice:      submitPractice,
     };
 
     if (!handlers[action]) {
@@ -566,6 +571,9 @@ function _getCourseCatalog() {
       hasQuiz:         !!r[cols.AiQuiz],
       hasSummary:      !!r[cols.AiSummary],
       pinned:          r[cols.Pinned] === true || String(r[cols.Pinned]).toUpperCase() === 'TRUE',
+      visibleTo:       _parseVisibleTo(cols.VisibleTo !== undefined ? r[cols.VisibleTo] : ''),
+      openFrom:        (cols.OpenFrom !== undefined && r[cols.OpenFrom]) ? (_taipeiDateOnly(r[cols.OpenFrom]) || { getTime: () => 0 }).getTime() : 0,
+      testPhase:       cols.TestPhase !== undefined ? String(r[cols.TestPhase] || '').trim().toLowerCase() : '',
       // 沒有 CreatedAt（舊課程、或還沒被 onEdit 蓋過時間）一律當最舊處理，
       // 前端「最新 4 堂」排序時會自然排到後面，不會噴錯或排到最前面。
       createdAt:       r[cols.CreatedAt] ? new Date(r[cols.CreatedAt]).getTime() : 0
@@ -650,6 +658,7 @@ function getCourseDetail({ courseId, userId, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
+  if (!_canSeeCourse(userId, courseId)) return { status: 'error', message: '找不到課程' };
   const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.COURSES));
   for (let i = 2; i < rows.length; i++) {
     if (String(rows[i][cols.CourseId]).trim() !== String(courseId).trim()) continue;
@@ -686,9 +695,11 @@ function getCourses({ userId, sessionToken }) {
 
   // 取得使用者部門
   let userDept = '';
+  let userRole = '';
   for (let i = 1; i < userRows.length; i++) {
     if (String(userRows[i][userCols.UserId]).trim() === String(userId).trim()) {
       userDept = String(userRows[i][userCols.Department] || '').trim();
+      userRole = String(userRows[i][userCols.Role] || '').toLowerCase();
       break;
     }
   }
@@ -731,7 +742,9 @@ function getCourses({ userId, sessionToken }) {
   }
 
   // 用快取的課程目錄 + 這位使用者的狀態疊加，不再每次整表讀 Courses
-  const courses = catalog.map(c => ({
+  // VisibleTo 有填的課只給指定部門（門市）看；admin 全看得到，方便 HR 預覽
+  const visibleCatalog = userRole === 'admin' ? catalog : catalog.filter(c => _isVisibleToDept(c.visibleTo, userDept));
+  const courses = visibleCatalog.map(c => ({
     id:              c.id,
     CourseId:        c.id,
     title:           c.title,
@@ -749,6 +762,9 @@ function getCourses({ userId, sessionToken }) {
     hasSummary:      c.hasSummary,
     pinned:          c.pinned,
     createdAt:       c.createdAt,
+    visibleTo:       c.visibleTo,
+    openFrom:        c.openFrom,
+    testPhase:       c.testPhase,
     isCompleted:     completedSet.has(c.id) || ojtApproved.has(c.id),
     ojtStatus:       ojtApproved.has(c.id) ? 'approved'
                    : ojtPending.has(c.id)  ? 'pending'
@@ -793,17 +809,41 @@ function getProgress({ userId, sessionToken }) {
 
 // ============================================================
 // 5. completeCourse
-// POST { userId, courseId, badges, isOJT, sessionToken }
+// POST { userId, courseId, sessionToken }   （前端舊版會多送 badges、isOJT，一律忽略）
 // → { status:'success', success:true }
+//
+// 2026/11/18 資安修正：完課條件與勳章全部由後端判斷，不相信前端傳來的值。
+//   - 課程要存在、而且這個人看得到
+//   - 門市對練的課（test／practice／selfpractice）只能走門市對練流程
+//   - OJT 課（OjtRequired 或「實戰解鎖」）只能等主管核准（reviewOJTTask），這裡不寫入
+//   - 一般課：要在 6 小時內於 submitQuiz 拿到 100 分（後端計分時記下）
+//   - 勳章一律用 Courses 表上的設定
 // ============================================================
 
-function completeCourse({ userId, courseId, badges, isOJT, sessionToken }) {
+const QUIZ_PASS_SECONDS = 21600;
+function _quizPassKey(userId, courseId) { return 'quizpass_' + String(userId).trim() + '_' + String(courseId).trim(); }
+
+function completeCourse({ userId, courseId, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  // OJT 課程的完課由 reviewOJTTask（主管核准後）觸發，這裡不寫入任何東西
-  if (isOJT) return { status: 'success', success: true };
+  const cid = String(courseId || '').trim();
+  const course = _getCourseCatalog().find(c => c.id === cid);
+  if (!course) return { status: 'error', message: '找不到課程' };
+  if (!_canSeeCourse(userId, cid)) return { status: 'error', message: '找不到課程' };
+  if (EXP_TYPES.indexOf(course.materialType) !== -1) return { status: 'error', message: '這堂課請在「門市對練」頁完成' };
 
+  const isOJT = course.ojtRequired || String(course.category || '').trim() === '實戰解鎖';
+  if (isOJT) return { status: 'success', success: true, pendingOJT: true }; // 等主管核准，這裡不寫入
+
+  if (!CacheService.getScriptCache().get(_quizPassKey(userId, cid))) {
+    return { status: 'error', message: '請先通過隨堂測驗（100 分）再完課' };
+  }
+  return _completeCourseRecord(userId, cid, course.badges || []);
+}
+
+// 內部完課寫入（呼叫前要自己確認完課條件）。門市對練（Experiment.gs）也走這裡。
+function _completeCourseRecord(userId, courseId, badges) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -904,8 +944,17 @@ function updateProgress({ userId, addMinutes, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
-  const delta = Number(addMinutes) || 0;
+  // 2026/11/18 資安修正：時數由前端計時送來，設上限避免被灌水（單次 120 分、每人每天 480 分）
+  const MAX_PER_CALL = 120, MAX_PER_DAY = 480;
+  let delta = Math.floor(Number(addMinutes) || 0);
   if (delta <= 0) return { status: 'error', message: 'addMinutes 必須大於 0' };
+  delta = Math.min(delta, MAX_PER_CALL);
+  const cache = CacheService.getScriptCache();
+  const dayKey = 'mins_' + String(userId).trim() + '_' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd');
+  const usedToday = Number(cache.get(dayKey)) || 0;
+  delta = Math.min(delta, Math.max(0, MAX_PER_DAY - usedToday));
+  if (delta <= 0) return getProgress({ userId, sessionToken });
+  cache.put(dayKey, String(usedToday + delta), 93600);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -2001,8 +2050,9 @@ function getDeptReport({ deptId, requestUserId, sessionToken }) {
     }
   }
 
-  const allCourses       = catalog.map(c => ({ courseId: c.id, title: c.title }));
-  const mandatoryCourses = catalog
+  const deptCatalog      = catalog.filter(c => _isVisibleToDept(c.visibleTo, deptId));
+  const allCourses       = deptCatalog.map(c => ({ courseId: c.id, title: c.title }));
+  const mandatoryCourses = deptCatalog
     .filter(c => c.globalMandatory || deptMandatorySet.has(c.id))
     .map(c => ({ courseId: c.id, title: c.title }));
 
@@ -2161,6 +2211,8 @@ function submitQuiz({ userId, courseId, answers, sessionToken }) {
   });
 
   const score = Math.round(correct / quizData.length * 100);
+  // 後端計分滿分才記「通過」，completeCourse 以此判斷能不能完課
+  if (score === 100) CacheService.getScriptCache().put(_quizPassKey(userId, courseId), '1', QUIZ_PASS_SECONDS);
   return { status: 'success', score: score, correct: correct, total: quizData.length, correctAnswers: correctAnswers };
 }
 
@@ -2230,7 +2282,8 @@ function checkOverdueAndNotify() {
     const isMandatory = r[courseCols.IsMandatory] === true || r[courseCols.IsMandatory] === 'TRUE';
     if (!isMandatory) continue;
     const dueDate = r[courseCols.DueDate] ? new Date(r[courseCols.DueDate]) : null;
-    globalMandatory.push({ courseId, title: r[courseCols.Title], dueDate });
+    globalMandatory.push({ courseId, title: r[courseCols.Title], dueDate,
+      visibleTo: _parseVisibleTo(courseCols.VisibleTo !== undefined ? r[courseCols.VisibleTo] : '') });
   }
 
   // 部門必修課 + 到職後天數
@@ -2284,6 +2337,7 @@ function checkOverdueAndNotify() {
     const overdueTitles = [];
 
     globalMandatory.forEach(c => {
+      if (!_isVisibleToDept(c.visibleTo, dept)) return; // 只給指定門市看的課，其他人不算逾期
       if (completed.has(c.courseId)) return;
       if (!c.dueDate) return;
       if (c.dueDate < today) overdueTitles.push(`${c.title}（期限：${_formatDate(c.dueDate)}）`);

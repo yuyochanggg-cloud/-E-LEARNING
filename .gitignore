@@ -31,3 +31,7 @@ dist-ssr
 
 # staging GAS 推送暫存
 gas/staging/build/
+gas/staging/seed/
+
+# 門市對練定案分組與選品（repo 公開，不能進 GitHub）
+gas/seed/

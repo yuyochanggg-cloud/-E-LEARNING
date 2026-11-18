@@ -77,12 +77,43 @@
 1. 改 `gas/Code.gs` → `npm run deploy-gas:staging`（複製 Code.gs＋`gas/staging/Setup.gs` 推到 staging 並更新部署；不碰正式專案）
 2. 前端：本機 `npm run dev:staging`，或 `npm run deploy:staging` 部署成 Vercel 預覽網址（有 Vercel 登入保護）
 3. 用測試帳號走過受影響的流程，並到測試試算表確認資料寫對
-4. 通過後才推正式：clone 正式專案（scriptId `1VsvmCYls0Y-p2YVFeY3y8iaJT3USNGSOeEBVpkT8vAM2wkSJCba72iQu`）→ **先 diff 線上 `程式碼.js` 與本機 Code.gs，不同就停** → 覆蓋後 `clasp push -f` → `clasp create-deployment -i AKfycbxTcxKo...`（既有正式部署 ID）。正式推送一律先問使用者
+4. 通過後才推正式：clone 正式專案（scriptId `1VsvmCYls0Y-p2YVFeY3y8iaJT3USNGSOeEBVpkT8vAM2wkSJCba72iQu`）→ **先 diff 線上 `程式碼.js` 與本機 Code.gs（之後還有 `Experiment.js`），不同就停** → 覆蓋 `程式碼.js`＝Code.gs、`Experiment.js`＝gas/Experiment.gs（**不要**放 Setup／SeedItems）→ `clasp push -f` → `clasp create-deployment -i AKfycbxTcxKo...`（既有正式部署 ID）。正式推送一律先問使用者
+5. 2026-11 起後端有兩個檔：`gas/Code.gs`（主程式）＋`gas/Experiment.gs`（門市對練實驗：課程可見性 helper、前後測、練習自陳）。Code.gs 會呼叫 Experiment.gs 的 `_parseVisibleTo`／`_isVisibleToDept`／`_canSeeCourse`，**正式專案少推 Experiment.js 會整個壞掉**
 
 注意：
 - `gas/staging/Setup.gs` 只推 staging，不要推到正式專案；`gas/staging/appsscript.json` 比正式多一個 `userinfo.email` 權限（Setup 需要）
 - 正式課程複製到測試：staging 的 Script Properties 設 `PROD_SHEET_ID` 後執行 `importCoursesFromProd`（只讀正式表）
 - 正式專案沒有設 `APP_ENV`，`_sendMail` 會照常寄信；**不要在正式專案設 `APP_ENV`**
+
+## 5.6 門市對練實驗（方案 4，2026/11/30 開課、8 週到 2027/01/24）上線清單
+
+規格依 2026/11/16 會議：左側獨立「門市對練」入口；每店受訓 2 類 × 每類 4 品項 × 每品項正式練習 2 次＝16 次；排程（11/17 定案）：每週 2 次可同一天、練滿關到下週一、上週不足只能本週補；某款第 1 次後隔天起第 2 次必出現；空位隨機補新款、兩類平均、員工不自選；每日最多 2 次；員工端前後測都叫「商品知識測驗」、不顯示分數；後測在「16 次練完」或「後測課 OpenFrom」先到者開放；交後測＋16 次都完成才發完課勳章；自主練習另一堂課、不限類別與商品但要填類別＋商品、不計入正式。
+程式：`gas/Experiment.gs`＋`src/Experiment.jsx`（DrillView）。staging 冒煙測試 `stagingSmokeExperiment`（Setup.gs）27 項全過，並用前端實走前測→今日派題→回報→bot→自主練習。
+
+上正式前依序：
+1. 門市分派與選品已定案，放在 **`gas/seed/FinalData.js`（gitignore，不進 GitHub；repo 是公開的，分組與對照類別不能公開）**，原始清單見 Codex 資料夾的定案選品 xlsx。換電腦時要從 xlsx 或舊電腦把這個檔帶過來。使用者還要提供：定稿題目（每類 7 題 × A/B、啟用=TRUE）→`實驗_題目`、正式 bot 網址
+2. 推正式後端（Code.gs＋Experiment.js＋**FinalData.js**，見 5.5 第 4 點；少推 FinalData.js 時分派與品項不會自動填，要手貼）→ 正式編輯器執行 `setupExperimentSheets`（建分頁；`實驗_門市分派`、`實驗_品項` 空的會自動寫入定案資料；`實驗_設定` 預設 開始日期 2026/11/30、總週數 8、每品項次數 2、每日上限 2、每週次數 2、練習網址＝要填 bot 網址）
+3. 題目貼進 `實驗_題目` 後先執行 `checkTestItems`（只讀不寫；檢查標題欄、題號重複、子類名稱、卷別 A/B、題幹與四選項不空白、選項不重複、答案 A–D、啟用 TRUE/FALSE、每類每卷 7 題，問題列出第幾列），通過再 `previewTestForms` → `assignTestForms`；開課當天（或前一天）執行 `snapshotParticipants` 存分組快照（之後調店不改分組；調整請填 `實驗_調整紀錄` 再跑 `applyParticipantAdjustments`，會留原門市／時間／處理人）
+4. Courses 加四列（VisibleTo＝8 店）：EXP-PRE（test、pre、標題「商品知識測驗」）、EXP-PRAC（practice）、EXP-SELF（selfpractice）、EXP-POST（test、post、標題「商品知識測驗」、Badges＝完課勳章名、OpenFrom＝2027/01/18 第 8 週）。這四種類型不會出現在課程資源庫
+5. 部署正式前端（GitHub Pages `npm run deploy`）
+6. 每週在正式編輯器執行 `refreshExperimentSummary` → 看「實驗_檢核」（各店完成率、每週次數、個人 x/16、未完成品項、後測、完課、自主練習）
+
+效能備註：`getExperimentStatus` 每次讀約 8 張表，`submitPractice` 會算 3 次狀態，staging 單次約 2–4 秒；80 人規模可接受，若門市反映慢再加快取。
+
+注意：日期欄（開始日期、OpenFrom、DueDate）一律在試算表手打，程式以「台北的那一天」解讀；不要用程式寫 Date 物件。
+
+## 5.7 資安（2026/11/18 檢查與修正）
+
+已修（staging 驗證：`stagingSmokeSecurity` 11 項、`stagingSmokeExperiment` 35 項全過；尚未上正式）：
+- `completeCourse` 不再相信前端：課程要存在且看得到；門市對練課只能走門市對練流程；OJT（OjtRequired 或「實戰解鎖」）只回 `pendingOJT`、不寫入；一般課要 6 小時內 `submitQuiz` 後端算到 100 分（CacheService `quizpass_`）；勳章一律用 Courses 設定。內部寫入改 `_completeCourseRecord`（門市對練也用它）。
+- `updateProgress`：單次最多 120 分、每人每天 480 分。
+
+待決（使用者決定）：
+- GitHub repo 為 PUBLIC。改私人會讓 GitHub Pages 正式站失效（免費帳號），要先改用 Vercel 正式站或升級 Pro。已推上去的 48 個 commit 查過沒有個資、密碼、金鑰、分組選品，只有試算表／GAS 的 ID 與 API 網址（無共用權限就打不開），不改寫歷史。**分組與選品在未 push 的 commit 裡，repo 公開期間不要 push。**
+- OJT 上傳：**正式 GAS 沒有設 `OJT_FOLDER_ID`（11/18 查指令碼屬性）→ 檔案存進部署者「我的雲端硬碟」根目錄**，且每個檔設「知道連結的任何人」可看。建議：建專用資料夾＋設 OJT_FOLDER_ID、程式改網域內可看、既有檔依 OJT_Tasks 的 OjtFileUrl 批次改權限（待使用者決定）。
+- 密碼明碼＋預設生日（既有取捨）：確認 Users 試算表共用名單最少。
+- 低：店長可改他部門必修課（`setDeptMandatory` 未檢查部門）；登入訊息可分辨工號存不存在；可惡意連錯 5 次鎖人 15 分鐘。
+- 未查：正式試算表、OJT 資料夾、GAS 部署、Vercel 的實際共用設定（要後台）。
 
 ## 6. 邊界（不要動的東西）
 
