@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle, AlertCircle, MessageCircle, Award, ClipboardList, Dumbbell } from 'lucide-react';
+import { CheckCircle, AlertCircle, MessageCircle, Award, ClipboardList, Dumbbell, Copy, Check } from 'lucide-react';
 import { gasClient } from './utils/gasClient';
 
 const LETTERS = ['A', 'B', 'C', 'D'];
@@ -134,12 +134,36 @@ export function TestView({ course, userId, onSubmitted }) {
 //   常駐層（一直都在）：AI 對練＋自主練習紀錄
 //   本期任務（檔期內、有派品項的人才出現）：商品知識測驗 → 每天派的正式練習 → 後測 → 完課勳章
 // ============================================================
+// 複製品名（貼到 AI 對練裡用）
+function CopyName({ text }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const t = document.createElement('textarea');
+      t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
+    }
+    setDone(true);
+    setTimeout(() => setDone(false), 1500);
+  };
+  return (
+    <button type="button" onClick={copy} title="複製品名"
+      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 shrink-0">
+      {done ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+      {done ? '已複製' : '複製品名'}
+    </button>
+  );
+}
+
 function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '我已完成', doneToday }) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col gap-3">
       <div>
         <span className="text-xs font-bold text-blue-600">{item.category}</span>
-        <h4 className="text-lg font-black text-slate-900">{item.name}</h4>
+        <div className="flex items-start justify-between gap-2">
+          <h4 className="text-lg font-black text-slate-900 select-text">{item.name}</h4>
+          <CopyName text={item.name} />
+        </div>
         {perItem && (
           <p className="text-xs text-slate-500 mt-1">
             {item.isSecond
@@ -346,8 +370,11 @@ export function DrillView({ userId, onChanged }) {
       {bot && (
         <div ref={botRef} className="bg-white rounded-2xl border border-indigo-200 overflow-hidden scroll-mt-4">
           <div className="flex items-center justify-between p-3 bg-indigo-50">
-            <span className="font-bold text-indigo-800 text-sm">AI 對練：{bot.name}</span>
-            <button onClick={() => setBot(null)} className="text-sm font-bold text-indigo-700 hover:underline">收起</button>
+            <span className="flex items-center gap-2 min-w-0">
+              <span className="font-bold text-indigo-800 text-sm select-text truncate">AI 對練：{bot.name}</span>
+              {bot.id !== 'self' || selfName ? <CopyName text={bot.name} /> : null}
+            </span>
+            <button onClick={() => setBot(null)} className="text-sm font-bold text-indigo-700 hover:underline shrink-0">收起</button>
           </div>
           {bot.url
             ? <iframe key={bot.id} src={bot.url} title={`AI 對練：${bot.name}`} allow="microphone" className="w-full h-[640px]" />

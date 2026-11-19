@@ -7,7 +7,10 @@ const ALIAS = 'lx-elearning-staging.vercel.app';
 
 const out = execSync(`vercel deploy --yes --build-env VITE_APP_ENV=staging --build-env VITE_GAS_API_URL=${GAS}`,
   { encoding: 'utf8', stdio: ['inherit', 'pipe', 'inherit'] });
-const url = out.trim().split(/\s+/).filter(s => s.startsWith('https://')).pop();
+// 輸出不是終端機時 vercel 會回 JSON；是終端機時是純網址
+let url;
+try { url = JSON.parse(out).deployment.url; }
+catch { url = out.trim().split(/\s+/).filter(s => s.startsWith('https://')).pop(); }
 if (!url) throw new Error('沒拿到部署網址：' + out);
 execSync(`vercel alias set ${url} ${ALIAS}`, { stdio: 'inherit' });
 console.log(`\n✅ staging 前端：https://${ALIAS}（這次部署 ${url}）`);
