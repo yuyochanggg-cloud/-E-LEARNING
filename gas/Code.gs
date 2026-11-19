@@ -1904,6 +1904,11 @@ function fixInflatedLearningMinutes() {
 // 先執行 previewOjtFileMigration（只讀、列出會改哪些），確認後執行 applyOjtFileMigration。
 // 只處理「我擁有」的檔案；外部連結（submitType=link）與找不到的檔案只列出不動。可重跑。
 // ============================================================
+// 執行者信箱：用 Drive 權限取得（正式專案沒有 userinfo.email，不能用 Session.getEffectiveUser().getEmail()）
+function _myEmail() {
+  try { return DriveApp.getRootFolder().getOwner().getEmail(); } catch (e) { return ''; }
+}
+
 function previewOjtFileMigration() { _migrateOjtFiles(false); }
 function applyOjtFileMigration()   { _migrateOjtFiles(true); }
 
@@ -1911,7 +1916,8 @@ function _migrateOjtFiles(apply) {
   const folderId = PropertiesService.getScriptProperties().getProperty('OJT_FOLDER_ID');
   if (!folderId) throw new Error('請先在指令碼屬性設定 OJT_FOLDER_ID');
   const folder = DriveApp.getFolderById(folderId);
-  const me = Session.getEffectiveUser().getEmail();
+  const me = _myEmail();
+  if (!me) throw new Error('取不到執行者信箱，無法判斷檔案擁有者');
   const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.OJT_TASKS));
   const stat = { change: 0, ok: 0, notMine: 0, external: 0, missing: 0 };
   const seen = {};

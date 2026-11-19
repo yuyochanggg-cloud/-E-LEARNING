@@ -679,7 +679,7 @@ function snapshotParticipants() {
 function applyParticipantAdjustments() {
   const adj = _expRead(EXP_SHEETS.ADJUST);
   const ppl = _expRead(EXP_SHEETS.PEOPLE);
-  const me = Session.getEffectiveUser().getEmail();
+  const me = _myEmail() || '（編輯器執行）';
   let done = 0;
   for (let i = 1; i < adj.rows.length; i++) {
     const r = adj.rows[i];
