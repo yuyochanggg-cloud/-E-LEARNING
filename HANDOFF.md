@@ -105,7 +105,8 @@
 5. 部署正式前端（GitHub Pages `npm run deploy`）
 6. 每週在正式編輯器執行 `refreshExperimentSummary` → 看「實驗_檢核」（各店完成率、每週次數、個人 x/16、未完成品項、後測、完課、自主練習）
 
-**2026/11/18 已上正式**：後端正式部署 @56（上一版 @55，退版用 `clasp update-deployment AKfycbxTcxKo... -V 55`）；正式推送方式＝clone 正式專案到暫存資料夾，`程式碼.js`＝Code.gs＋`Experiment.js`＋`FinalData.js`，appsscript.json 沿用正式版。已完成第 2、4、5 步：`setupExperimentSheets` 已跑（門市分派 8 列、品項 64 列自動寫入）、`實驗_設定` 練習網址已填 altatech bot、Courses 第 30–33 列為 EXP-PRE／PRAC／SELF／POST。上線前唯讀檢查：27 堂一般課都有 AiQuiz（資安修正不會讓課完不了）；8 店名稱與 Users 部門一字不差（共 76 人；高雄中華店、高雄時代店不在 VisibleTo）。GitHub Pages 前端 index-CyYxNqgo.js。**未完成**：第 3 步（題目、snapshotParticipants）；正式 appsscript.json 沒有 `userinfo.email`，`previewOjtFileMigration`／`applyParticipantAdjustments` 呼叫 `Session.getEffectiveUser().getEmail()` 會「權限不足」失敗。
+**2026/11/18 已上正式**：後端正式部署 @56（上一版 @55，退版用 `clasp update-deployment AKfycbxTcxKo... -V 55`）；正式推送方式＝clone 正式專案到暫存資料夾，`程式碼.js`＝Code.gs＋`Experiment.js`＋`FinalData.js`，appsscript.json 沿用正式版。已完成第 2、4、5 步：`setupExperimentSheets` 已跑（門市分派 8 列、品項 64 列自動寫入）、`實驗_設定` 練習網址已填 altatech bot、Courses 第 30–33 列為 EXP-PRE／PRAC／SELF／POST。上線前唯讀檢查：27 堂一般課都有 AiQuiz（資安修正不會讓課完不了）；8 店名稱與 Users 部門一字不差（共 76 人；高雄中華店、高雄時代店不在 VisibleTo）。GitHub Pages 前端 index-CyYxNqgo.js。**未完成**：第 3 步（題目、snapshotParticipants）；正式 appsscript.json 沒有 `userinfo.email`，`previewOjtFileMigration`／`applyParticipantAdjustments` 呼叫 `Session.getEffectiveUser().getEmail()` 會「權限不足」失敗 → 本機已改用 `_myEmail()`（DriveApp 根資料夾擁有者信箱，不需新權限），**尚未推 staging／正式**（11/19 clasp 要求重新登入 invalid_rapt，等使用者 `npx -y @google/clasp login`）。
+**2026/11/19 前端更新上正式**（GitHub Pages index-BisMZu17.js）：品項卡按鈕改「複製品名並開啟 AI 對練」、對練視窗接在該卡片下方（卡片展開整行）、移除「指定品項進度」；自主練習同樣接在按鈕下方。staging 加了 demo 帳號 T0005（測試市民＝台北市民店的類別與 8 款，密碼由使用者自填）。
 
 效能備註：`getExperimentStatus` 每次讀約 8 張表，`submitPractice` 會算 3 次狀態，staging 單次約 2–4 秒；80 人規模可接受，若門市反映慢再加快取。
 
