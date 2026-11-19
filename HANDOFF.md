@@ -75,7 +75,7 @@
 
 固定流程：
 1. 改 `gas/Code.gs` → `npm run deploy-gas:staging`（複製 Code.gs＋`gas/staging/Setup.gs` 推到 staging 並更新部署；不碰正式專案）
-2. 前端：本機 `npm run dev:staging`，或 `npm run deploy:staging` 部署成 Vercel 預覽網址（有 Vercel 登入保護）
+2. 前端：本機 `npm run dev:staging`，或 `npm run deploy:staging` 部署成 Vercel 預覽（有 Vercel 登入保護）；腳本會把固定網址 **https://lx-elearning-staging.vercel.app** 指到最新部署（2026/11/19 起），demo／測試一律用這個網址，不用每次換
 3. 用測試帳號走過受影響的流程，並到測試試算表確認資料寫對
 4. 通過後才推正式：clone 正式專案（scriptId `1VsvmCYls0Y-p2YVFeY3y8iaJT3USNGSOeEBVpkT8vAM2wkSJCba72iQu`）→ **先 diff 線上 `程式碼.js` 與本機 Code.gs（之後還有 `Experiment.js`），不同就停** → 覆蓋 `程式碼.js`＝Code.gs、`Experiment.js`＝gas/Experiment.gs（**不要**放 Setup／SeedItems）→ `clasp push -f` → `clasp create-deployment -i AKfycbxTcxKo...`（既有正式部署 ID）。正式推送一律先問使用者
 5. 2026-11 起後端有兩個檔：`gas/Code.gs`（主程式）＋`gas/Experiment.gs`（門市對練實驗：課程可見性 helper、前後測、練習自陳）。Code.gs 會呼叫 Experiment.gs 的 `_parseVisibleTo`／`_isVisibleToDept`／`_canSeeCourse`，**正式專案少推 Experiment.js 會整個壞掉**
