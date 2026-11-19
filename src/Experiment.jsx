@@ -135,14 +135,19 @@ export function TestView({ course, userId, onSubmitted }) {
 //   本期任務（檔期內、有派品項的人才出現）：商品知識測驗 → 每天派的正式練習 → 後測 → 完課勳章
 // ============================================================
 // 複製品名（貼到 AI 對練裡用）
+async function copyText(text) {
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const t = document.createElement('textarea');
+    t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
+  }
+}
+
 function CopyName({ text }) {
   const [done, setDone] = useState(false);
   const copy = async () => {
-    try { await navigator.clipboard.writeText(text); }
-    catch {
-      const t = document.createElement('textarea');
-      t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
-    }
+    await copyText(text);
     setDone(true);
     setTimeout(() => setDone(false), 1500);
   };
@@ -155,15 +160,33 @@ function CopyName({ text }) {
   );
 }
 
-function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '我已完成', doneToday }) {
+// AI 對練視窗：直接接在按「開啟 AI 對練」的那張卡片／區塊下面
+function BotPanel({ bot, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => { ref.current && ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [bot.id]);
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col gap-3">
+    <div ref={ref} className="rounded-2xl border border-indigo-200 overflow-hidden scroll-mt-4">
+      <div className="flex items-center justify-between gap-2 p-3 bg-indigo-50">
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="font-bold text-indigo-800 text-sm select-text truncate">AI 對練：{bot.name}</span>
+          {bot.copyName && <span className="text-xs text-indigo-600 hidden sm:inline">品名已複製，可直接貼到對話框</span>}
+          {bot.copyName && <CopyName text={bot.copyName} />}
+        </span>
+        <button onClick={onClose} className="text-sm font-bold text-indigo-700 hover:underline shrink-0">收起</button>
+      </div>
+      {bot.url
+        ? <iframe key={bot.id} src={bot.url} title={`AI 對練：${bot.name}`} allow="microphone" className="w-full h-[640px] bg-white" />
+        : <p className="p-5 text-sm text-slate-500 bg-white">這個品項的 AI 對練還在準備中。</p>}
+    </div>
+  );
+}
+
+function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '我已完成', doneToday, open, onClose }) {
+  return (
+    <div className={`bg-white rounded-2xl border border-slate-200 p-5 flex flex-col gap-3 ${open ? 'md:col-span-2' : ''}`}>
       <div>
         <span className="text-xs font-bold text-blue-600">{item.category}</span>
-        <div className="flex items-start justify-between gap-2">
-          <h4 className="text-lg font-black text-slate-900 select-text">{item.name}</h4>
-          <CopyName text={item.name} />
-        </div>
+        <h4 className="text-lg font-black text-slate-900 select-text">{item.name}</h4>
         {perItem && (
           <p className="text-xs text-slate-500 mt-1">
             {item.isSecond
@@ -175,14 +198,15 @@ function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '
       </div>
       <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line flex-1">{item.guide || '（練習指引準備中）'}</p>
       <div className="flex flex-wrap gap-2">
-        <button onClick={() => onOpenBot(item)} className="flex items-center gap-1 px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold text-sm hover:bg-indigo-50">
-          <MessageCircle className="w-4 h-4" /> 開啟 AI 對練
+        <button onClick={() => { copyText(item.name); onOpenBot(item); }} className="flex items-center gap-1 px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold text-sm hover:bg-indigo-50">
+          <MessageCircle className="w-4 h-4" /> 複製品名並開啟 AI 對練
         </button>
         <button onClick={() => onReport(item)} disabled={sending || doneToday}
           className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-sm">
           {doneToday ? '✓ 今天已完成' : (sending ? '送出中...' : reportLabel)}
         </button>
       </div>
+      {open && <BotPanel bot={{ ...item, copyName: item.name }} onClose={onClose} />}
     </div>
   );
 }
@@ -196,7 +220,6 @@ export function DrillView({ userId, onChanged }) {
   const [flash, setFlash] = useState('');
   const [selfCat, setSelfCat] = useState('');
   const [selfName, setSelfName] = useState('');
-  const botRef = useRef(null);
 
   const load = useCallback(async () => {
     try {
@@ -209,8 +232,6 @@ export function DrillView({ userId, onChanged }) {
   }, [userId]);
 
   useEffect(() => { load(); }, [load]);
-  // 打開 AI 對練時捲到對練視窗
-  useEffect(() => { if (bot && botRef.current) botRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [bot]);
 
   if (error) return <Notice tone="warn">{error}</Notice>;
   if (!status) return <div className="p-10 text-center text-slate-500 font-bold animate-pulse">載入中...</div>;
@@ -337,7 +358,8 @@ export function DrillView({ userId, onChanged }) {
                   <div className="grid gap-4 md:grid-cols-2">
                     {status.today.map(it => (
                       <ItemCard key={it.id} item={it} perItem={status.perItem} onOpenBot={setBot}
-                        onReport={report} sending={sending} doneToday={it.doneToday} />
+                        onReport={report} sending={sending} doneToday={it.doneToday}
+                        open={bot?.id === it.id} onClose={() => setBot(null)} />
                     ))}
                   </div>
                 </>
@@ -345,41 +367,7 @@ export function DrillView({ userId, onChanged }) {
             </div>
           )}
 
-          {/* 品項進度 */}
-          {status.pretestDone && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
-              <h4 className="font-black text-slate-900 mb-3">指定品項進度</h4>
-              <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-                {status.items.map(it => (
-                  <div key={it.id} className="flex items-center justify-between text-sm">
-                    <span className="text-slate-700">{it.name}</span>
-                    <span className="flex gap-1" aria-label={`已練 ${Math.min(it.count, status.perItem)} / ${status.perItem} 次`}>
-                      {Array.from({ length: status.perItem }).map((_, k) => (
-                        <span key={k} className={`w-3 h-3 rounded-full ${k < it.count ? 'bg-blue-600' : 'bg-slate-200'}`} />
-                      ))}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </section>
-      )}
-
-      {/* ===== AI 對練視窗 ===== */}
-      {bot && (
-        <div ref={botRef} className="bg-white rounded-2xl border border-indigo-200 overflow-hidden scroll-mt-4">
-          <div className="flex items-center justify-between p-3 bg-indigo-50">
-            <span className="flex items-center gap-2 min-w-0">
-              <span className="font-bold text-indigo-800 text-sm select-text truncate">AI 對練：{bot.name}</span>
-              {bot.id !== 'self' || selfName ? <CopyName text={bot.name} /> : null}
-            </span>
-            <button onClick={() => setBot(null)} className="text-sm font-bold text-indigo-700 hover:underline shrink-0">收起</button>
-          </div>
-          {bot.url
-            ? <iframe key={bot.id} src={bot.url} title={`AI 對練：${bot.name}`} allow="microphone" className="w-full h-[640px]" />
-            : <p className="p-5 text-sm text-slate-500">這個品項的 AI 對練還在準備中。</p>}
-        </div>
       )}
 
       {/* ===== 常駐層：自主練習（不限類別與商品，例如每月主推），要留下練了什麼 ===== */}
@@ -412,15 +400,16 @@ export function DrillView({ userId, onChanged }) {
                 </label>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button onClick={() => setBot({ id: 'self', name: selfName || '自主練習', url: status.botUrl })}
+                <button onClick={() => { const n = selfName.trim(); copyText(n); setBot({ id: 'self', name: n || '自主練習', copyName: n, url: status.botUrl }); }}
                   className="flex items-center gap-1 px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold text-sm hover:bg-indigo-50">
-                  <MessageCircle className="w-4 h-4" /> 開啟 AI 對練
+                  <MessageCircle className="w-4 h-4" /> {selfName.trim() ? '複製品名並開啟 AI 對練' : '開啟 AI 對練'}
                 </button>
                 <button onClick={reportSelf} disabled={sending}
                   className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-sm">
                   {sending ? '送出中...' : '我已完成（自主）'}
                 </button>
               </div>
+              {bot?.id === 'self' && <BotPanel bot={bot} onClose={() => setBot(null)} />}
             </>
           )}
         </section>
