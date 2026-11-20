@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 import { gasClient } from './utils/gasClient';
-import { DrillView, EXPERIMENT_TYPES } from './Experiment';
+import { DrillView, EXPERIMENT_TYPES, PracticeProgressView, usePracticeProgress } from './Experiment';
 
 const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
@@ -20,6 +20,11 @@ const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 // 全域音訊播放器 (singleton，跨頁面背景播放)
 // ==========================================
 const globalAudio = new Audio();
+
+// 管理頁在左側選單／標題的名稱（supervisor＝督導，只看 AI 對練進度）
+function managerViewLabel(role) {
+  return role === 'admin' ? '系統管理中心' : role === 'supervisor' ? 'AI 對練進度' : '主管審核中心';
+}
 
 // ==========================================
 // Toast 系統 (全域，避免 prop drilling)
@@ -755,8 +760,8 @@ const handleCourseComplete = async (badges) => {
           )}
           <button onClick={() => navigateTo('achievements')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'achievements' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-800'}`}><Award className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">我的成就</span></button>
           
-          {(userProfile?.role === 'manager' || userProfile?.role === 'admin') && (
-            <button onClick={() => navigateTo('manager')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'manager' ? 'bg-amber-600 text-white' : 'text-amber-500 hover:bg-slate-800'}`}><ShieldCheck className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">{userProfile?.role === 'admin' ? '系統管理中心' : '主管審核中心'}</span></button>
+          {['manager', 'admin', 'supervisor'].includes(userProfile?.role) && (
+            <button onClick={() => navigateTo('manager')} className={`w-full flex items-center justify-center md:justify-start p-3 rounded-xl font-bold transition-colors ${currentView === 'manager' ? 'bg-amber-600 text-white' : 'text-amber-500 hover:bg-slate-800'}`}><ShieldCheck className="md:mr-3 w-5 h-5"/> <span className="hidden md:inline">{managerViewLabel(userProfile?.role)}</span></button>
           )}
         </div>
 
@@ -771,6 +776,7 @@ const handleCourseComplete = async (badges) => {
                 {userProfile.userId || userProfile.empId}
               </span>
               {userProfile.role === 'manager' && <span className="text-[10px] text-amber-300 font-bold border border-amber-800 bg-amber-900/50 px-1.5 py-0.5 rounded ml-1 tracking-wider">👑 主管</span>}
+              {userProfile.role === 'supervisor' && <span className="text-[10px] text-amber-300 font-bold border border-amber-800 bg-amber-900/50 px-1.5 py-0.5 rounded ml-1 tracking-wider">督導</span>}
               {userProfile.role === 'admin' && <span className="text-[10px] text-blue-300 font-bold border border-blue-800 bg-blue-900/50 px-1.5 py-0.5 rounded ml-1 tracking-wider">⚙️ Admin</span>}
             </div>
           </div>
@@ -786,7 +792,7 @@ const handleCourseComplete = async (badges) => {
               {currentView === 'library' && '六大頻道資源庫'}
               {currentView === 'achievements' && '六大向度與遊戲化成就'}
               {currentView === 'drill' && <><Dumbbell className="w-6 h-6 mr-2 text-blue-600"/> AI 門市對練</>}
-              {currentView === 'manager' && <><ShieldCheck className="w-6 h-6 mr-2 text-amber-500"/> {userProfile?.role === 'admin' ? '系統管理中心' : '主管審核中心'}</>}
+              {currentView === 'manager' && <><ShieldCheck className="w-6 h-6 mr-2 text-amber-500"/> {managerViewLabel(userProfile?.role)}</>}
               {currentView === 'course' && <><BookOpen className="w-6 h-6 mr-2 text-blue-600"/> 課程學習區 (提取練習與微學習)</>}
             </h1>
             <div className="flex items-center space-x-4">
@@ -1387,7 +1393,8 @@ function AchievementView({ progress, courses }) {
 // 👑 主管管理中心（三 Tab 版）
 // ==========================================
 function ManagerDashboard({ onBack, userProfile, courses }) {
-  const [activeTab, setActiveTab] = useState('ojt');
+  const isSupervisor = userProfile?.role === 'supervisor'; // 督導：唯讀，只看 AI 對練進度
+  const [activeTab, setActiveTab] = useState(isSupervisor ? 'practice' : 'ojt');
   const [tasks, setTasks]               = useState([]);
   const [reviewingId, setReviewingId]   = useState(null); // 審核送出中的 taskId（後端約需 4 秒，期間鎖住按鈕）
   const [deptReport, setDeptReport]     = useState(null);
@@ -1398,9 +1405,14 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
 
   const isAdmin   = userProfile?.role === 'admin';
   const userId    = userProfile?.userId || userProfile?.empId;
+  // AI 對練進度：進管理中心就先拉一次，決定要不要顯示這個分頁（開放日前、或門市沒有指定品項就不顯示）
+  const [practice, reloadPractice] = usePracticeProgress(userId);
+  const pd = practice.data;
+  const showPractice = isSupervisor || isAdmin || (!!pd && pd.open && pd.stores.length > 0);
 
   // 切 tab 時重新拉資料
   useEffect(() => {
+    if (isSupervisor) return;
     if (activeTab === 'ojt')      fetchPendingTasks();
     if (activeTab === 'report')   fetchDeptReport();
     if (activeTab === 'settings') fetchDeptMandatory();
@@ -1506,10 +1518,11 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
     });
   }
 
-  const tabs = [
+  const tabs = isSupervisor ? [{ key: 'practice', label: 'AI 對練進度' }] : [
     { key: 'ojt',      label: 'OJT 作業審核' },
     { key: 'report',   label: '部門學習狀況' },
     { key: 'settings', label: '必修課設定' },
+    ...(showPractice ? [{ key: 'practice', label: 'AI 對練進度' }] : []),
   ];
 
   return (
@@ -1525,7 +1538,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
       </div>
 
       {/* admin 部門選擇 */}
-      {isAdmin && (
+      {isAdmin && activeTab !== 'practice' && (
         <div className="mb-4 flex items-center gap-3">
           <span className="text-sm text-slate-500 font-medium">查看部門：</span>
           <select value={selectedDept} onChange={e => setSelectedDept(e.target.value)}
@@ -1551,7 +1564,9 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
       </div>
 
       {/* Loading */}
-      {isLoading && (
+      {activeTab === 'practice' && <PracticeProgressView state={practice} onReload={reloadPractice} />}
+
+      {isLoading && activeTab !== 'practice' && (
         <div className="flex justify-center py-16">
           <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
         </div>

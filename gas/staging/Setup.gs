@@ -399,6 +399,135 @@ function stagingCheckOjtMigration() {
   Logger.log(results.join('\n'));
 }
 
+// ============================================================
+// 店長／督導看 AI 對練進度＋每月 25 號月報（只限 staging）
+// 會重建實驗示範資料，把開始日期改成 15 天前（第 3 週、應完成 4 次），再塞練習紀錄：
+//   T0004（測試中壢）正式 4 次＋前測 → 達標；T0003（測試三創）正式 1 次＋自主 1 次 → 落後 3 次；T0002（三創店長）0 次。
+// 督導帳號 T0006（測試營業通路處，role=supervisor）沒有就自動補。
+// ============================================================
+function _stagingEnsureUser(id, name, role, dept) {
+  const sheet = getSheet(SHEET_NAMES.USERS);
+  const { cols, rows } = _readSheet(sheet);
+  if (rows.some((r, i) => i > 0 && String(r[cols.UserId]).trim() === id)) return;
+  const email = PropertiesService.getScriptProperties().getProperty('STAGING_MAIL_TO') || '';
+  sheet.appendRow(_buildRow(cols, { UserId: id, Email: email, Name: name, Role: role, CreatedAt: new Date(),
+    Password: 'stg-' + Utilities.getUuid().slice(0, 8), IsFirstLogin: false, Department: dept }));
+}
+
+function _stagingSetConfig(key, value) {
+  const { sheet, cols, rows } = _expRead(EXP_SHEETS.CONFIG);
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][cols['項目']]).trim() === key) { sheet.getRange(i + 1, cols['值'] + 1).setValue(value); return; }
+  }
+  sheet.appendRow([key, value]);
+}
+
+function stagingSmokeTeam() {
+  _assertStagingSpreadsheet();
+  setupExperimentDemo();
+  _stagingEnsureUser('T0006', '測試督導', 'supervisor', '測試營業通路處');
+  const results = [];
+  const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? '：' + extra : ''}`);
+  const day = n => new Date(Date.now() - n * 86400000);
+  const fmt = d => Utilities.formatDate(d, 'Asia/Taipei', 'yyyy/MM/dd');
+  _stagingSetConfig('開始日期', fmt(day(15)));
+
+  // 練習紀錄（直接寫表，模擬前兩週的回報）
+  const cfg = _expConfig();
+  const itemsOf = store => _expPracticeItems(store, _expStoreCategories(store), cfg);
+  const zl = itemsOf('測試中壢'), sc = itemsOf('測試三創');
+  const rec = (uid, name, store, d, it, type) => ({ '回報時間': d, '工號': uid, '姓名': name, '門市': store, '週次': _expWeekNo(cfg.start, d),
+    '類型': type || '正式', '類別': it ? it.category : EXP_CAT.K, '品項編號': it ? it.id : '', '品項名稱': it ? it.name : '自主測試商品' });
+  _expAppend(EXP_SHEETS.PRACTICE, [
+    rec('T0004', '測試中壢店員', '測試中壢', day(14), zl[0]), rec('T0004', '測試中壢店員', '測試中壢', day(13), zl[4]),
+    rec('T0004', '測試中壢店員', '測試中壢', day(7), zl[0]), rec('T0004', '測試中壢店員', '測試中壢', day(6), zl[4]),
+    rec('T0003', '測試三創店員', '測試三創', day(12), sc[0]), rec('T0003', '測試三創店員', '測試三創', day(5), null, '自主')
+  ]);
+  _expAppend(EXP_SHEETS.RESPONSES, [{ '作答時間': day(14), '工號': 'T0004', '姓名': '測試中壢店員', '門市': '測試中壢', '階段': 'pre', '卷別': 'B', '題號': 'X1', '作答': 'A', '正解': 'A', '是否答對': true }]);
+
+  const get = uid => getPracticeProgress({ requestUserId: uid, sessionToken: _generateSessionToken(uid) });
+  const bad = res => res.status !== 'success' && !res.success;
+
+  // ---- 權限 ----
+  check('員工看不到進度', get('T0003').status === 'error');
+  check('冒用別人的工號 → 擋', getPracticeProgress({ requestUserId: 'T0006', sessionToken: _generateSessionToken('T0003') }).status === 'error');
+  const m = get('T0002').data;
+  check('店長只看到自己門市', m.stores.length === 1 && m.stores[0].store === '測試三創' && m.people.every(p => p.store === '測試三創'), m.stores.map(s => s.store).join());
+  const sv = get('T0006').data;
+  check('督導看到全部門市', sv.stores.length === 2 && sv.people.some(p => p.store === '測試中壢') && sv.people.some(p => p.store === '測試三創'));
+  check('管理員看到全部門市', get('T0001').data.stores.length === 2);
+  const tk6 = _generateSessionToken('T0006');
+  check('督導不能看 OJT 待審', bad(getPendingOJTTasks({ requestUserId: 'T0006', sessionToken: tk6 })));
+  check('督導不能審核 OJT', bad(reviewOJTTask({ taskId: 'X', newStatus: 'approved', requestUserId: 'T0006', sessionToken: tk6 })));
+  check('督導不能看部門學習報表', bad(getDeptReport({ deptId: '測試三創', requestUserId: 'T0006', sessionToken: tk6 })));
+  check('督導不能改必修課', bad(setDeptMandatory({ deptId: '測試三創', courseId: 'STG001', isAdd: true, requestUserId: 'T0006', sessionToken: tk6 })));
+  const json = JSON.stringify(sv);
+  check('回傳不含分數、答對、類別／對照類', ['score', '答對', '正解', 'category', '對照', EXP_CAT.W, EXP_CAT.C].every(k => json.indexOf(k) === -1));
+
+  // ---- 計算 ----
+  const p4 = sv.people.find(p => p.uid === 'T0004'), p3 = sv.people.find(p => p.uid === 'T0003'), p2 = sv.people.find(p => p.uid === 'T0002');
+  check('第 3 週、應完成 4 次', sv.weekNo === 3 && sv.stores.every(s => s.expected === 4), `第 ${sv.weekNo} 週、應完成 ${sv.stores.map(s => s.expected).join('/')}`);
+  check('T0004 累計 4／16、達標、前測已交', p4.formalDone === 4 && p4.target === 16 && p4.onTrack && p4.pre && !p4.post);
+  check('T0004 還沒練滿的品項＝6 款（2 款各練 2 次）', p4.lack.length === 6, String(p4.lack.length));
+  check('T0003 落後 3 次、自主 1 次', p3.formalDone === 1 && p3.behind === 3 && !p3.onTrack && p3.selfTotal === 1);
+  check('店長本人也列在門市名單（0 次、落後 4）', !!p2 && p2.formalDone === 0 && p2.behind === 4);
+  const s3 = sv.stores.find(s => s.store === '測試三創');
+  check('三創門市摘要：人數 2、達標 0、人均 0.5', s3.headcount === 2 && s3.onTrack === 0 && s3.avgDone === 0.5, JSON.stringify(s3));
+  check('排序：落後多的在前', m.people[0].uid === 'T0002');
+
+  // ---- 開放日前 ----
+  _stagingSetConfig('開始日期', '2099/01/01');
+  const mClosed = get('T0002').data, aClosed = get('T0001').data;
+  check('開始日前：店長看不到（只回開放日）', mClosed.open === false && !mClosed.stores && mClosed.openDate === '2099/01/01');
+  check('開始日前：督導看不到', get('T0006').data.open === false && !get('T0006').data.stores);
+  check('開始日前：管理員可預覽', aClosed.open === false && aClosed.stores.length === 2);
+  _stagingSetConfig('開始日期', fmt(day(15)));
+
+  // ---- 月報區間 ----
+  const per = s => { const p = _expReportPeriod(new Date(s)); return fmt(p.from) + '–' + fmt(p.to); };
+  check('12/25 08:00 → 11/25–12/25', per('2026-12-25T08:00:00+08:00') === '2026/11/25–2026/12/25', per('2026-12-25T08:00:00+08:00'));
+  check('12/24 23:59 → 10/25–11/25', per('2026-12-24T23:59:00+08:00') === '2026/10/25–2026/11/25', per('2026-12-24T23:59:00+08:00'));
+  check('跨年 1/25 → 12/25–1/25', per('2027-01-25T08:00:00+08:00') === '2026/12/25–2027/01/25', per('2027-01-25T08:00:00+08:00'));
+  check('1/5 → 11/25–12/25', per('2027-01-05T08:00:00+08:00') === '2026/11/25–2026/12/25', per('2027-01-05T08:00:00+08:00'));
+
+  // ---- 月報內容與收件人 ----
+  const now = new Date();
+  const c2 = _expConfig();
+  const rep = _expBuildReport(now, day(40), new Date(now.getTime() + 1));
+  const mailOf = k => rep.mails.find(x => (k === '督導' ? x.kind === '督導' : x.store === k));
+  const staffMail = PropertiesService.getScriptProperties().getProperty('STAGING_MAIL_TO');
+  check('月報：2 封店長＋1 封督導', rep.mails.length === 3 && !!mailOf('測試三創') && !!mailOf('測試中壢') && !!mailOf('督導'));
+  check('月報區間從開始日起算（不早於開始日）', rep.label.indexOf(fmt(c2.start)) === 0, rep.label);
+  check('三創店長信寄給 T0002', mailOf('測試三創').to.length === 1 && mailOf('測試三創').to[0] === staffMail);
+  check('中壢沒有店長 → 沒收件人', mailOf('測試中壢').to.length === 0);
+  check('督導信寄給 T0006', mailOf('督導').to.indexOf(staffMail) !== -1);
+  check('三創店長信有同仁明細、沒有別店', mailOf('測試三創').html.indexOf('測試三創店員') !== -1 && mailOf('測試三創').html.indexOf('測試中壢店員') === -1);
+  check('督導信有兩店、含 ⚠', mailOf('督導').html.indexOf('測試三創') !== -1 && mailOf('督導').html.indexOf('測試中壢') !== -1 && mailOf('督導').html.indexOf('⚠') !== -1);
+  check('月報不含類別／對照類／分數', rep.mails.every(x => ['對照', '答對', '分數', EXP_CAT.W, EXP_CAT.C].every(k => x.html.indexOf(k) === -1)));
+  check('區間內正式次數：三創 1、中壢 4', mailOf('督導').text.indexOf('測試三創｜2｜1｜') !== -1 && mailOf('督導').text.indexOf('測試中壢｜1｜4｜') !== -1, mailOf('督導').text.split('\n').slice(2, 5).join(' / '));
+  check('區間在開始日前 → 不寄', !!_expBuildReport(now, day(60), day(20)).skip);
+  check('區間在檔期結束後 → 不寄', !!_expBuildReport(now, c2.end, new Date(c2.end.getTime() + 30 * 86400000)).skip);
+  check('區間涵蓋檔期結束 → 整期總結', _expBuildReport(now, day(10), c2.end).final === true);
+  check('檔期中 → 一般月報', rep.final === false && mailOf('督導').subject.indexOf('月報') !== -1);
+  check('設定沒填月報寄送 → 測試', c2.reportMode === '測試');
+
+  // ---- 重複寄送保護 ----
+  const label = 'TEST-' + Date.now();
+  check('沒寄過 → 可以寄', !_expReportAlreadySent(label));
+  _expReportLog([{ '寄送時間': now, '模式': '正式', '統計區間': label, '對象': '測試', '收件人': '', '結果': '成功' }]);
+  check('同一區間寄過（正式成功）→ 不重寄', _expReportAlreadySent(label));
+
+  Logger.log(results.join('\n'));
+  Logger.log(results.some(r => r.indexOf('FAIL') === 0) ? '❌ 有失敗項目' : `✅ 全部 ${results.length} 項通過`);
+}
+
+// 把目前資料的月報預覽寄給自己看排版（staging 一律改寄 STAGING_MAIL_TO）
+function stagingPreviewReport() {
+  _assertStagingSpreadsheet();
+  const now = new Date();
+  _expSendReport(now, new Date(now.getTime() - 40 * 86400000), new Date(now.getTime() + 1), '測試');
+}
+
 // staging 測後測「到期開放」用：把後測開放日改成今天（或改回 2027/01/04）
 function stagingPostOpenToday() { _stagingSetPostOpen(Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd')); }
 function stagingPostOpenLater() { _stagingSetPostOpen('2027/01/04'); }
@@ -421,4 +550,14 @@ function replaceTestItemsFromSeed() {
   sheet.getRange(2, 1, SEED_TEST_ITEMS.length, SEED_TEST_ITEMS[0].length).setValues(SEED_TEST_ITEMS);
   const a = SEED_TEST_ITEMS.filter(r => r[2] === 'A').length;
   Logger.log(`✅ 實驗_題目 已換成 ${SEED_TEST_ITEMS.length} 題（A 卷 ${a}、B 卷 ${SEED_TEST_ITEMS.length - a}）`);
+}
+
+// 畫面實測用（只限 staging）：產生 T0002 店長、T0003 店員、T0006 督導的登入憑證（6 小時有效），印在執行記錄。
+// 本機 staging 前端把憑證放進 localStorage 就能以該身分進站，不需要輸入密碼。
+function stagingIssueTokens() {
+  _assertStagingSpreadsheet();
+  ['T0002', 'T0003', 'T0006'].forEach(id => {
+    const u = _getUserInfo(id);
+    Logger.log(`${id} ${u ? u.role : '?'} TOKEN=${_generateSessionToken(id)}`);
+  });
 }

@@ -23,6 +23,9 @@
 //   實驗_調整紀錄   工號 | 新門市 | 原因 | 原門市 | 處理時間 | 處理人
 //   實驗_作答紀錄   作答時間 | 工號 | 姓名 | 門市 | 階段 | 卷別 | 題號 | 子類 | 作答 | 正解 | 是否答對
 //   實驗_練習紀錄   回報時間 | 工號 | 姓名 | 門市 | 週次 | 類型 | 類別 | 品項編號 | 品項名稱 | 備註
+//   實驗_月報紀錄   寄送時間 | 模式 | 統計區間 | 對象 | 收件人 | 結果   （每月 25 號月報，程式自動寫）
+//
+// 店長／督導看進度：Users.Role＝manager 只看自己部門；supervisor（督導，唯讀）看全部門市；admin 看全部。
 // ============================================================
 
 const EXP_SHEETS = {
@@ -34,7 +37,8 @@ const EXP_SHEETS = {
   PEOPLE:     '實驗_參與者',
   ADJUST:     '實驗_調整紀錄',
   RESPONSES:  '實驗_作答紀錄',
-  PRACTICE:   '實驗_練習紀錄'
+  PRACTICE:   '實驗_練習紀錄',
+  REPORT_LOG: '實驗_月報紀錄'
 };
 
 const EXP_HEADERS = {
@@ -46,7 +50,8 @@ const EXP_HEADERS = {
   [EXP_SHEETS.PEOPLE]:    ['工號', '姓名', '門市', '建立時間'],
   [EXP_SHEETS.ADJUST]:    ['工號', '新門市', '原因', '原門市', '處理時間', '處理人'],
   [EXP_SHEETS.RESPONSES]: ['作答時間', '工號', '姓名', '門市', '階段', '卷別', '題號', '子類', '作答', '正解', '是否答對'],
-  [EXP_SHEETS.PRACTICE]:  ['回報時間', '工號', '姓名', '門市', '週次', '類型', '類別', '品項編號', '品項名稱', '備註']
+  [EXP_SHEETS.PRACTICE]:  ['回報時間', '工號', '姓名', '門市', '週次', '類型', '類別', '品項編號', '品項名稱', '備註'],
+  [EXP_SHEETS.REPORT_LOG]: ['寄送時間', '模式', '統計區間', '對象', '收件人', '結果']
 };
 
 const EXP_TYPES = ['test', 'practice', 'selfpractice'];
@@ -172,7 +177,9 @@ function _expConfig() {
   const perWeek = Number(map['每週次數']) || 2;
   const end = start ? new Date(start.getTime() + totalWeeks * 7 * 86400000) : null; // 不含當天
   const botUrl = String(map['練習網址'] || '').trim();
-  return { start, end, totalWeeks, perItem, dailyMax, perWeek, botUrl };
+  // 月報寄送：只有明確填「正式」才寄給店長與督導；空白或其他值一律當「測試」（只寄給執行者自己）
+  const reportMode = String(map['月報寄送'] || '').trim() === '正式' ? '正式' : '測試';
+  return { start, end, totalWeeks, perItem, dailyMax, perWeek, botUrl, reportMode };
 }
 
 function _expWeekNo(start, when) {
@@ -201,8 +208,8 @@ function _expStoreOf(user) {
 
 // 某門市的練習品項（每店各自 4 款／類）。「門市」欄空白＝該類所有門市共用。
 // 品項沒填練習網址時，用「實驗_設定」的「練習網址」。
-function _expPracticeItems(store, categories, cfg) {
-  const { cols, rows } = _expRead(EXP_SHEETS.PITEMS);
+function _expPracticeItems(store, categories, cfg, pitems) {
+  const { cols, rows } = pitems || _expRead(EXP_SHEETS.PITEMS); // pitems：已讀好的表（一次算多店時不用重讀）
   const fallbackUrl = (cfg && cfg.botUrl) || '';
   const out = [];
   for (let i = 1; i < rows.length; i++) {
@@ -631,6 +638,9 @@ function setupExperimentSheets() {
 
   const cfg = ss.getSheetByName(EXP_SHEETS.CONFIG);
   if (cfg.getLastRow() < 2) cfg.getRange(2, 1, 6, 2).setValues([['開始日期', '2026/11/30'], ['總週數', 8], ['每品項次數', 2], ['每日上限', 2], ['每週次數', 2], ['練習網址', '']]);
+  // 月報寄送開關（後來加的設定）：沒有這一列才補，預設「測試」
+  const cfgKeys = cfg.getRange(1, 1, cfg.getLastRow(), 1).getValues().map(r => String(r[0]).trim());
+  if (cfgKeys.indexOf('月報寄送') === -1) cfg.getRange(cfg.getLastRow() + 1, 1, 1, 2).setValues([['月報寄送', '測試']]);
 
   // 定案的門市分派與選品：表是空的才寫入，已有資料不動
   const assign = ss.getSheetByName(EXP_SHEETS.ASSIGN);
@@ -927,4 +937,332 @@ function refreshExperimentSummary() {
   sheet.getRange(1, 1, out.length, W).setValues(out);
   sheet.getRange(1, 1).setFontWeight('bold');
   Logger.log('✅ 實驗_檢核 已更新');
+}
+
+// ============================================================
+// 門市對練進度（店長看自己門市、督導看全部）＋每月 25 號月報
+//   只給「完成狀況」：不含測驗分數、不分本店類別／對照類（研究用欄位只在「實驗_檢核」）。
+//   「達標」＝累計正式練習 ≥ 每週次數 × 已過週數（上一週沒練滿可在這一週補，補完就回到達標）。
+// ============================================================
+
+const EXP_APP_URL_DEFAULT = 'https://yuyochanggg-cloud.github.io/-E-LEARNING/';
+const EXP_VIEW_ROLES = ['manager', 'supervisor', 'admin'];
+
+// 一次讀齊所有表，算出各店與個人的進度。from/to（可省略）＝另外統計 [from, to) 區間內的練習次數
+function _expTeamData(now, from, to) {
+  const cfg = _expConfig();
+  const phase = !cfg.start || now < cfg.start ? 'notStarted' : (now >= cfg.end ? 'ended' : 'running');
+  const weekNo = _expWeekNo(cfg.start, now);
+  const weeksPassed = phase === 'ended' ? cfg.totalWeeks : (phase === 'running' ? weekNo - 1 : 0);
+
+  // 有派品項的門市（之後改成店長自己指定品項時，只要換掉這一段的來源）
+  const a = _expRead(EXP_SHEETS.ASSIGN);
+  const pitems = _expRead(EXP_SHEETS.PITEMS);
+  const storeOrder = [], items = {};
+  for (let i = 1; i < a.rows.length; i++) {
+    const s = String(a.rows[i][a.cols['門市']] || '').trim();
+    if (!s || items[s]) continue;
+    const cats = [a.rows[i][a.cols['練習類別1']], a.rows[i][a.cols['練習類別2']]].map(x => String(x || '').trim()).filter(Boolean);
+    items[s] = _expPracticeItems(s, cats, cfg, pitems);
+    storeOrder.push(s);
+  }
+
+  // 人：有分組快照用快照的門市（跟員工端 _expStoreOf 一致），沒有就用目前部門
+  const snap = {};
+  const pp = _expRead(EXP_SHEETS.PEOPLE);
+  for (let i = 1; i < pp.rows.length; i++) {
+    const uid = String(pp.rows[i][pp.cols['工號']]).trim();
+    if (uid) snap[uid] = String(pp.rows[i][pp.cols['門市']] || '').trim();
+  }
+  const people = [], byUid = {};
+  const u = _readSheet(getSheet(SHEET_NAMES.USERS));
+  for (let i = 1; i < u.rows.length; i++) {
+    const uid = String(u.rows[i][u.cols.UserId] || '').trim();
+    if (!uid) continue;
+    const store = snap[uid] || String(u.rows[i][u.cols.Department] || '').trim();
+    if (!items[store]) continue;
+    const p = { uid, name: String(u.rows[i][u.cols.Name] || ''), store, pre: false, post: false, recs: [], periodFormal: 0, periodSelf: 0, lastDay: '' };
+    people.push(p);
+    byUid[uid] = p;
+  }
+
+  const r = _expRead(EXP_SHEETS.RESPONSES); // 只看有沒有交，不讀作答內容與對錯
+  for (let i = 1; i < r.rows.length; i++) {
+    const p = byUid[String(r.rows[i][r.cols['工號']]).trim()];
+    if (!p) continue;
+    const ph = String(r.rows[i][r.cols['階段']]).trim();
+    if (ph === 'pre') p.pre = true;
+    if (ph === 'post') p.post = true;
+  }
+
+  const pr = _expRead(EXP_SHEETS.PRACTICE);
+  for (let i = 1; i < pr.rows.length; i++) {
+    const row = pr.rows[i];
+    const p = byUid[String(row[pr.cols['工號']]).trim()];
+    if (!p) continue;
+    const t = new Date(row[pr.cols['回報時間']]);
+    if (isNaN(t.getTime())) continue;
+    const type = String(row[pr.cols['類型']]).trim();
+    const day = _taipeiDayKey(t);
+    p.recs.push({ day, type, id: String(row[pr.cols['品項編號']]).trim() });
+    if (day > p.lastDay) p.lastDay = day;
+    if (from && t >= from && t < to) { if (type === '自主') p.periodSelf++; else p.periodFormal++; }
+  }
+
+  people.forEach(p => {
+    const its = items[p.store];
+    const st = _expComputeState(p.uid, p.recs, its, cfg, now);
+    const expected = Math.min(st.formalTarget, cfg.perWeek * weeksPassed);
+    Object.assign(p, {
+      formalDone: st.formalDone, target: st.formalTarget, expected,
+      behind: Math.max(0, expected - st.formalDone), onTrack: st.formalDone >= expected, allDone: st.allDone,
+      weekDone: phase === 'running' ? st.weekDone : 0, weekQuota: phase === 'running' ? st.weekQuota : 0,
+      lack: its.filter(it => (st.count[it.id] || 0) < cfg.perItem).map(it => ({ name: it.name, count: st.count[it.id] || 0 })),
+      selfTotal: st.selfTotal
+    });
+    delete p.recs;
+  });
+  people.sort((x, y) => storeOrder.indexOf(x.store) - storeOrder.indexOf(y.store) || y.behind - x.behind || x.uid.localeCompare(y.uid));
+
+  const stores = storeOrder.map(s => {
+    const l = people.filter(p => p.store === s);
+    const n = l.length;
+    const sum = f => l.reduce((x, p) => x + f(p), 0);
+    const target = items[s].length * cfg.perItem;
+    return {
+      store: s, headcount: n, target, expected: Math.min(target, cfg.perWeek * weeksPassed),
+      avgDone: n ? Math.round(sum(p => p.formalDone) / n * 10) / 10 : 0,
+      onTrack: l.filter(p => p.onTrack).length, allDone: l.filter(p => p.allDone).length,
+      weekMet: l.filter(p => p.allDone || (p.weekQuota > 0 && p.weekDone >= p.weekQuota)).length, // 全部練完的人不會再有本週次數，算已練滿
+      preDone: l.filter(p => p.pre).length, postDone: l.filter(p => p.post).length,
+      periodFormal: sum(p => p.periodFormal), periodSelf: sum(p => p.periodSelf)
+    };
+  });
+  return { cfg, phase, weekNo, weeksPassed, stores, people };
+}
+
+// 每月 25 號 00:00（台北）是月報切點
+function _exp25(y, m) { // m 可以超出 1–12
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  return new Date(`${d.getUTCFullYear()}-${('0' + (d.getUTCMonth() + 1)).slice(-2)}-25T00:00:00+08:00`);
+}
+// 回傳最近一個已過的切點 to 與前一個切點 from：25 號寄的月報＝上月 25 日～本月 24 日
+function _expReportPeriod(now) {
+  const y = Number(Utilities.formatDate(now, 'Asia/Taipei', 'yyyy'));
+  const m = Number(Utilities.formatDate(now, 'Asia/Taipei', 'M'));
+  let to = _exp25(y, m), back = 1;
+  if (now < to) { to = _exp25(y, m - 1); back = 2; }
+  return { from: _exp25(y, m - back), to };
+}
+
+// 店長／督導的「AI 對練進度」頁
+function getPracticeProgress({ requestUserId, sessionToken }) {
+  const err = _requireSession(sessionToken, requestUserId);
+  if (err) return { status: 'error', message: err };
+  const me = _getUserInfo(requestUserId);
+  if (!me || EXP_VIEW_ROLES.indexOf(me.role) === -1) return { status: 'error', message: '權限不足' };
+
+  const now = new Date();
+  const cfg = _expConfig();
+  const open = !!cfg.start && now >= cfg.start;
+  // 開始日前只有管理員看得到（預覽用），店長與督導不顯示
+  if (!open && me.role !== 'admin') return { status: 'success', data: { open: false, openDate: _fmtDay(cfg.start) } };
+
+  const since = _expReportPeriod(now).to; // 「本月」＝最近一次 25 號起到現在
+  const d = _expTeamData(now, since, new Date(now.getTime() + 1));
+  const mine = s => me.role !== 'manager' || s === me.dept;
+  return {
+    status: 'success',
+    data: {
+      open, openDate: _fmtDay(cfg.start), role: me.role, myStore: me.role === 'manager' ? me.dept : '',
+      phase: d.phase, weekNo: d.weekNo, weeksPassed: d.weeksPassed, totalWeeks: cfg.totalWeeks,
+      perWeek: cfg.perWeek, perItem: cfg.perItem,
+      startDate: _fmtDay(cfg.start), endDate: cfg.end ? _fmtDay(new Date(cfg.end.getTime() - 86400000)) : '',
+      periodFrom: _fmtDay(since),
+      stores: d.stores.filter(s => mine(s.store)),
+      people: d.people.filter(p => mine(p.store)).map(p => ({
+        uid: p.uid, name: p.name, store: p.store, pre: p.pre, post: p.post,
+        formalDone: p.formalDone, target: p.target, expected: p.expected, behind: p.behind, onTrack: p.onTrack, allDone: p.allDone,
+        weekDone: p.weekDone, weekQuota: p.weekQuota, lack: p.lack, selfTotal: p.selfTotal,
+        periodFormal: p.periodFormal, periodSelf: p.periodSelf, lastDay: p.lastDay ? p.lastDay.replace(/-/g, '/') : ''
+      }))
+    }
+  };
+}
+
+// ---------- 月報 ----------
+
+function _expEsc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function _expHtmlTable(head, rows) {
+  const th = 'style="border:1px solid #cbd5e1;padding:6px 10px;background:#f1f5f9;text-align:left;white-space:nowrap"';
+  const td = 'style="border:1px solid #e2e8f0;padding:6px 10px;vertical-align:top"';
+  return '<table style="border-collapse:collapse;font-size:14px;margin:6px 0 18px">'
+    + `<tr>${head.map(h => `<th ${th}>${_expEsc(h)}</th>`).join('')}</tr>`
+    + rows.map(r => `<tr>${r.map(c => `<td ${td}>${_expEsc(c)}</td>`).join('')}</tr>`).join('')
+    + '</table>';
+}
+
+function _expTextTable(head, rows) {
+  return [head].concat(rows).map(r => r.join('｜')).join('\n');
+}
+
+function _expPersonStatus(p) {
+  if (p.allDone) return '✓ 全部練完';
+  return p.onTrack ? '✓ 達標' : `落後 ${p.behind} 次`;
+}
+
+// 組出這一期要寄的所有信（不寄）。回傳 { skip } 或 { label, final, mails:[{ kind, store, to:[], noEmail:[], subject, html, text }] }
+function _expBuildReport(now, from, to) {
+  const cfg0 = _expConfig();
+  if (!cfg0.start || to <= cfg0.start) return { skip: '統計區間在開始日期（' + _fmtDay(cfg0.start) + '）之前' };
+  if (cfg0.end && from >= cfg0.end) return { skip: '統計區間在檔期結束之後' };
+
+  const d = _expTeamData(now, from, to);
+  const cfg = d.cfg;
+  const shownFrom = from < cfg.start ? cfg.start : from;
+  const label = `${_fmtDay(shownFrom)}–${_fmtDay(new Date(to.getTime() - 1))}`;
+  const final = !!cfg.end && to >= cfg.end;
+  const kindName = final ? '整期總結' : '月報';
+  const url = PropertiesService.getScriptProperties().getProperty('APP_URL') || EXP_APP_URL_DEFAULT;
+  const where = final
+    ? `這是這一期（${_fmtDay(cfg.start)} 起共 ${cfg.totalWeeks} 週）的最終結果。`
+    : `目前是第 ${d.weekNo} 週（共 ${cfg.totalWeeks} 週）。`;
+  const expectedNow = d.stores.length ? d.stores[0].expected : 0;
+  const rule = `進度怎麼算：每週練 ${cfg.perWeek} 次、每個品項練 ${cfg.perItem} 次；「達標」＝累計完成次數 ≥ 每週 ${cfg.perWeek} 次 × 已過週數（目前應完成 ${expectedNow} 次）。上一週沒練滿的次數，可以在這一週補。`;
+  const foot = `<p style="color:#64748b;font-size:13px">${_expEsc(rule)}</p>`
+    + `<p>即時進度：<a href="${url}">良興雲端學院</a> → 主管審核中心 → AI 對練進度</p>`
+    + '<p style="color:#94a3b8;font-size:12px">本信由系統每月 25 日自動寄出。</p>';
+
+  // 收件人：店長＝該門市 role=manager；督導＝role=supervisor
+  const u = _readSheet(getSheet(SHEET_NAMES.USERS));
+  const managers = {}, supervisors = [];
+  for (let i = 1; i < u.rows.length; i++) {
+    const role = String(u.rows[i][u.cols.Role] || '').toLowerCase();
+    const who = { name: String(u.rows[i][u.cols.Name] || ''), email: String(u.rows[i][u.cols.Email] || '').trim() };
+    if (role === 'manager') {
+      const dept = String(u.rows[i][u.cols.Department] || '').trim();
+      (managers[dept] = managers[dept] || []).push(who);
+    } else if (role === 'supervisor') supervisors.push(who);
+  }
+  const split = list => ({ to: list.filter(x => _isValidEmail(x.email)).map(x => x.email), noEmail: list.filter(x => !_isValidEmail(x.email)).map(x => x.name) });
+
+  const mails = [];
+  const storeHead = ['人數', '區間內正式練習', '區間內自主練習', '累計人均完成', '進度達標', '全部練完', '前測已交', '後測已交'];
+  const storeRow = s => [`${s.headcount} 人`, `${s.periodFormal} 次`, `${s.periodSelf} 次`, `${s.avgDone} / ${s.target}`,
+    `${s.onTrack} / ${s.headcount}`, `${s.allDone} / ${s.headcount}`, `${s.preDone} / ${s.headcount}`, `${s.postDone} / ${s.headcount}`];
+  const personHead = ['姓名', '區間內正式', '累計完成', '狀態', '還沒練滿的品項', '自主練習（累計）'];
+
+  d.stores.forEach(s => {
+    const rows = d.people.filter(p => p.store === s.store).map(p => [p.name, p.periodFormal, `${p.formalDone} / ${p.target}`, _expPersonStatus(p),
+      p.lack.map(x => `${x.name}（${x.count}/${cfg.perItem}）`).join('、'), p.selfTotal]);
+    const intro = `${s.store} 店長您好：以下是 ${label} 的 AI 門市對練統計。${where}`;
+    mails.push(Object.assign({
+      kind: '店長', store: s.store, subject: `【良興雲端學院】AI 門市對練${kindName}｜${s.store}（${label}）`,
+      html: `<p>${_expEsc(intro)}</p><h3 style="margin:12px 0 4px">門市摘要</h3>${_expHtmlTable(storeHead, [storeRow(s)])}`
+        + `<h3 style="margin:12px 0 4px">同仁明細</h3>${_expHtmlTable(personHead, rows)}${foot}`,
+      text: `${intro}\n\n【門市摘要】\n${_expTextTable(storeHead, [storeRow(s)])}\n\n【同仁明細】\n${_expTextTable(personHead, rows)}\n\n${rule}\n即時進度：${url}`
+    }, split(managers[s.store] || [])));
+  });
+
+  const rate = s => s.headcount ? Math.round(s.onTrack / s.headcount * 100) : 0;
+  const allHead = ['門市', '人數', '區間內正式練習', '區間內自主練習', '累計人均完成', '達標率', '全部練完', '前測已交', '後測已交'];
+  const allRows = d.stores.slice().sort((x, y) => rate(x) - rate(y)).map(s => [
+    (s.avgDone < s.expected ? '⚠ ' : '') + s.store, s.headcount, s.periodFormal, s.periodSelf, `${s.avgDone} / ${s.target}`,
+    `${rate(s)}%（${s.onTrack}/${s.headcount}）`, s.allDone, s.preDone, s.postDone]);
+  const tot = f => d.stores.reduce((x, s) => x + f(s), 0);
+  const n = tot(s => s.headcount);
+  allRows.push(['合計', n, tot(s => s.periodFormal), tot(s => s.periodSelf), '',
+    n ? `${Math.round(tot(s => s.onTrack) / n * 100)}%（${tot(s => s.onTrack)}/${n}）` : '-',
+    tot(s => s.allDone), tot(s => s.preDone), tot(s => s.postDone)]);
+  const intro = `督導您好：以下是 ${label} 各門市的 AI 門市對練統計（依達標率由低到高排列）。${where}`;
+  mails.push(Object.assign({
+    kind: '督導', store: '', subject: `【良興雲端學院】AI 門市對練${kindName}｜各店總覽（${label}）`,
+    html: `<p>${_expEsc(intro)}</p>${_expHtmlTable(allHead, allRows)}<p style="font-size:13px">⚠＝門市人均完成低於應有進度。各店同仁明細請到網站查看。</p>${foot}`,
+    text: `${intro}\n\n${_expTextTable(allHead, allRows)}\n\n⚠＝門市人均完成低於應有進度。\n${rule}\n即時進度：${url}`
+  }, split(supervisors)));
+
+  return { label, final, mails };
+}
+
+function _expReportLog(rows) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss.getSheetByName(EXP_SHEETS.REPORT_LOG)) {
+    const sh = ss.insertSheet(EXP_SHEETS.REPORT_LOG);
+    sh.getRange(1, 1, 1, EXP_HEADERS[EXP_SHEETS.REPORT_LOG].length).setValues([EXP_HEADERS[EXP_SHEETS.REPORT_LOG]]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  _expAppend(EXP_SHEETS.REPORT_LOG, rows);
+}
+
+function _expReportAlreadySent(label) {
+  if (!getSheet(EXP_SHEETS.REPORT_LOG)) return false;
+  const { cols, rows } = _expRead(EXP_SHEETS.REPORT_LOG);
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][cols['模式']]).trim() === '正式' && String(rows[i][cols['統計區間']]).trim() === label
+      && String(rows[i][cols['結果']]).trim().indexOf('成功') === 0) return true;
+  }
+  return false;
+}
+
+// mode：'正式'＝分別寄給店長與督導；'測試'＝全部內容合成一封，只寄給執行者自己（附每封的收件人）
+function _expSendReport(now, from, to, mode) {
+  const rep = _expBuildReport(now, from, to);
+  if (rep.skip) { Logger.log('略過月報：' + rep.skip); return rep; }
+  if (mode === '正式' && _expReportAlreadySent(rep.label)) {
+    Logger.log('略過月報：' + rep.label + ' 已經寄過');
+    return { skip: '這個區間已經寄過', label: rep.label };
+  }
+  const log = [];
+  const base = { '寄送時間': now, '模式': mode, '統計區間': rep.label };
+  if (mode === '測試') {
+    const me = _myEmail();
+    if (!me) throw new Error('取不到執行者信箱，無法寄預覽');
+    const note = '目前「實驗_設定」的「月報寄送」是「測試」，以下內容沒有寄給店長與督導。改成「正式」後，每月 25 號會依下列收件人分別寄出。';
+    const who = m => (m.to.join('、') || '（沒有可寄的信箱）') + (m.noEmail.length ? '｜沒填信箱：' + m.noEmail.join('、') : '');
+    _sendMail({
+      to: me, subject: `【月報預覽｜測試模式】AI 門市對練${rep.final ? '整期總結' : '月報'}（${rep.label}）`,
+      body: note + '\n\n' + rep.mails.map(m => `收件人：${who(m)}\n主旨：${m.subject}\n${m.text}`).join('\n\n-----\n\n'),
+      htmlBody: `<p style="color:#b45309">${_expEsc(note)}</p>`
+        + rep.mails.map(m => `<hr><p><b>收件人：</b>${_expEsc(who(m))}<br><b>主旨：</b>${_expEsc(m.subject)}</p>${m.html}`).join('')
+    });
+    log.push(Object.assign({ '對象': '預覽（全部）', '收件人': me, '結果': '成功' }, base));
+  } else {
+    rep.mails.forEach(m => {
+      const target = m.kind === '店長' ? '店長｜' + m.store : '督導';
+      const missing = m.noEmail.length ? '；沒填信箱：' + m.noEmail.join('、') : '';
+      if (!m.to.length) { log.push(Object.assign({ '對象': target, '收件人': '', '結果': '沒有可寄的信箱' + missing }, base)); return; }
+      try {
+        _sendMail({ to: m.to.join(','), subject: m.subject, body: m.text, htmlBody: m.html });
+        log.push(Object.assign({ '對象': target, '收件人': m.to.join('、'), '結果': '成功' + missing }, base));
+      } catch (e) {
+        log.push(Object.assign({ '對象': target, '收件人': m.to.join('、'), '結果': '失敗：' + e.message }, base));
+      }
+    });
+  }
+  _expReportLog(log);
+  Logger.log(`✅ 月報（${mode}）${rep.label}：` + log.map(l => `${l['對象']} ${l['結果']}`).join('；'));
+  return rep;
+}
+
+// 排程呼叫：每月 25 號早上寄「上月 25 日～本月 24 日」
+function sendMonthlyPracticeReport() {
+  const now = new Date();
+  const p = _expReportPeriod(now);
+  _expSendReport(now, p.from, p.to, _expConfig().reportMode);
+}
+
+// 手動預覽（編輯器執行）：統計「最近一次 25 號到現在」，不管開關，一律只寄給執行者自己
+function previewMonthlyPracticeReport() {
+  const now = new Date();
+  _expSendReport(now, _expReportPeriod(now).to, now, '測試');
+}
+
+// 建立每月 25 號 08:00（台北）的排程。執行一次即可，重跑會先刪掉舊的
+function setupMonthlyReportTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'sendMonthlyPracticeReport') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('sendMonthlyPracticeReport').timeBased().onMonthDay(25).atHour(8).inTimezone('Asia/Taipei').create();
+  Logger.log('✅ 已建立每月 25 號 08:00 的 AI 門市對練月報排程（實際寄送時間約 8～9 點）');
 }

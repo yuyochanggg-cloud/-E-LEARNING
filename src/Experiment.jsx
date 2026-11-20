@@ -417,3 +417,152 @@ export function DrillView({ userId, onChanged }) {
     </div>
   );
 }
+
+// ============================================================
+// AI 對練進度（店長看自己門市；督導、管理員看全部門市）
+// 只顯示完成狀況：沒有測驗分數、沒有分組／對照類資訊
+// ============================================================
+export function usePracticeProgress(userId) {
+  const [state, setState] = useState({ loading: true });
+  const fetchState = useCallback(() => gasClient.securePost('getPracticeProgress', { requestUserId: userId }).then(
+    res => (res.status === 'success' ? { loading: false, data: res.data } : { loading: false, error: res.message || '載入失敗' }),
+    () => ({ loading: false, error: '連線異常，請稍後再試' })
+  ), [userId]);
+  useEffect(() => {
+    let alive = true;
+    fetchState().then(s => { if (alive) setState(s); });
+    return () => { alive = false; };
+  }, [fetchState]);
+  const reload = useCallback(() => {
+    setState(s => ({ ...s, loading: true }));
+    fetchState().then(setState);
+  }, [fetchState]);
+  return [state, reload];
+}
+
+const rateOf = s => (s.headcount ? Math.round(s.onTrack / s.headcount * 100) : 0);
+
+function StatusBadge({ p }) {
+  if (p.allDone) return <span className="px-2 py-0.5 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700 whitespace-nowrap">全部練完</span>;
+  if (p.onTrack) return <span className="px-2 py-0.5 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 whitespace-nowrap">✓ 達標</span>;
+  return <span className="px-2 py-0.5 rounded-lg text-xs font-bold bg-red-50 text-red-700 whitespace-nowrap">落後 {p.behind} 次</span>;
+}
+
+function StoreDetail({ store, people, d }) {
+  const running = d.phase === 'running';
+  const cards = [
+    { label: '人數', value: `${store.headcount}`, unit: '人' },
+    { label: '進度達標', value: `${store.onTrack}/${store.headcount}`, unit: '人', warn: store.onTrack < store.headcount },
+    running ? { label: '本週已練滿', value: `${store.weekMet}/${store.headcount}`, unit: '人' } : { label: '後測已交', value: `${store.postDone}/${store.headcount}`, unit: '人' },
+    { label: '全部練完', value: `${store.allDone}/${store.headcount}`, unit: '人' }
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {cards.map(c => (
+          <div key={c.label} className="bg-white border border-slate-200 rounded-2xl p-4 text-center">
+            <p className="text-xs text-slate-500 mb-1">{c.label}</p>
+            <p className={`text-2xl font-extrabold ${c.warn ? 'text-amber-600' : 'text-slate-800'}`}>{c.value}<span className="text-sm font-normal text-slate-500 ml-1">{c.unit}</span></p>
+          </div>
+        ))}
+      </div>
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="font-bold text-slate-700">{store.store}｜同仁進度</h3>
+          <span className="text-xs text-slate-500">人均完成 {store.avgDone}/{store.target}｜前測已交 {store.preDone}/{store.headcount}</span>
+        </div>
+        {people.length === 0 ? <p className="px-5 py-8 text-center text-slate-500 text-sm">這家門市目前沒有同仁名單</p> : (
+          <div className="divide-y divide-slate-100">
+            {people.map(p => (
+              <div key={p.uid} className="px-5 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-800">{p.name} <span className="text-xs text-slate-500 font-normal">{p.uid}</span></p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {running && !p.allDone && <>本週 {p.weekDone}/{p.weekQuota} 次｜</>}本月正式 {p.periodFormal} 次、自主 {p.periodSelf} 次｜最後練習 {p.lastDay || '—'}
+                    </p>
+                  </div>
+                  <StatusBadge p={p} />
+                </div>
+                <div className="mt-2 flex items-center gap-3">
+                  <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${p.onTrack ? 'bg-emerald-400' : 'bg-amber-400'}`} style={{ width: `${p.target ? Math.round(p.formalDone / p.target * 100) : 0}%` }} />
+                  </div>
+                  <span className="text-xs text-slate-600 whitespace-nowrap">累計 {p.formalDone}/{p.target}（應完成 {p.expected}）</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+                  <span className={`px-2 py-0.5 rounded border ${p.pre ? 'bg-slate-50 text-slate-600 border-slate-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>前測{p.pre ? '已交' : '未交'}</span>
+                  {d.phase === 'ended' && <span className={`px-2 py-0.5 rounded border ${p.post ? 'bg-slate-50 text-slate-600 border-slate-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>後測{p.post ? '已交' : '未交'}</span>}
+                  {!p.allDone && p.lack.map(x => (
+                    <span key={x.name} className="px-2 py-0.5 rounded bg-slate-50 text-slate-600 border border-slate-200">{x.name}（{x.count}/{d.perItem}）</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function PracticeProgressView({ state, onReload }) {
+  const [selected, setSelected] = useState('');
+  if (state.loading && !state.data) return <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>;
+  if (state.error) return <Notice tone="error">{state.error}</Notice>;
+  const d = state.data;
+  if (!d.open && d.role !== 'admin') return <Notice>AI 對練進度會在 {d.openDate} 開放。</Notice>;
+  if (!d.stores.length) return <Notice>你的門市目前沒有指定練習品項，所以沒有對練進度可以看。</Notice>;
+
+  const multi = d.stores.length > 1;
+  const current = d.stores.find(s => s.store === selected) || (multi ? null : d.stores[0]);
+  const expected = d.stores[0].expected;
+  const phaseText = d.phase === 'running' ? `第 ${d.weekNo} 週（共 ${d.totalWeeks} 週）` : d.phase === 'ended' ? '這一期已結束' : '尚未開始';
+
+  return (
+    <div className="space-y-4">
+      {!d.open && <Notice tone="warn">開放日（{d.openDate}）前只有管理員看得到這一頁，店長與督導目前看不到。</Notice>}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+        <p>
+          <b className="text-slate-800">{phaseText}</b>｜{d.startDate}–{d.endDate}｜「本月」＝{d.periodFrom} 起
+          <br className="md:hidden" />
+          <span className="text-slate-500 md:ml-2">達標＝累計完成 ≥ 每週 {d.perWeek} 次 × 已過週數（目前應完成 {expected} 次）</span>
+        </p>
+        <button onClick={onReload} disabled={state.loading} className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-medium disabled:opacity-50">
+          {state.loading ? '更新中…' : '重新整理'}
+        </button>
+      </div>
+
+      {multi && (
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs">
+              <tr>{['門市', '人數', '本月正式', '本月自主', '人均完成', '達標率', '全部練完', '前測已交', '後測已交'].map(h => <th key={h} className="px-3 py-2 text-left font-semibold whitespace-nowrap">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {d.stores.slice().sort((x, y) => rateOf(x) - rateOf(y)).map(s => (
+                <tr key={s.store} onClick={() => setSelected(s.store)}
+                  className={`cursor-pointer hover:bg-blue-50 ${current?.store === s.store ? 'bg-blue-50' : ''}`}>
+                  <td className="px-3 py-2 font-semibold text-slate-800 whitespace-nowrap">{s.avgDone < s.expected && <span title="人均完成低於應有進度" className="text-amber-500">⚠ </span>}{s.store}</td>
+                  <td className="px-3 py-2">{s.headcount}</td>
+                  <td className="px-3 py-2">{s.periodFormal}</td>
+                  <td className="px-3 py-2">{s.periodSelf}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{s.avgDone}/{s.target}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{rateOf(s)}%（{s.onTrack}/{s.headcount}）</td>
+                  <td className="px-3 py-2">{s.allDone}</td>
+                  <td className="px-3 py-2">{s.preDone}</td>
+                  <td className="px-3 py-2">{s.postDone}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="px-3 py-2 text-xs text-slate-500 border-t border-slate-100">依達標率由低到高排列；⚠＝人均完成低於應有進度。點門市看同仁明細。</p>
+        </div>
+      )}
+
+      {current
+        ? <StoreDetail store={current} people={d.people.filter(p => p.store === current.store)} d={d} />
+        : <p className="text-center text-slate-500 text-sm py-6">點上方任一門市，看同仁明細</p>}
+    </div>
+  );
+}

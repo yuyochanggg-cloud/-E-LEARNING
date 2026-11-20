@@ -108,6 +108,14 @@
 **2026/11/18 已上正式**：後端正式部署 @56（上一版 @55，退版用 `clasp update-deployment AKfycbxTcxKo... -V 55`）；正式推送方式＝clone 正式專案到暫存資料夾，`程式碼.js`＝Code.gs＋`Experiment.js`＋`FinalData.js`，appsscript.json 沿用正式版。已完成第 2、4、5 步：`setupExperimentSheets` 已跑（門市分派 8 列、品項 64 列自動寫入）、`實驗_設定` 練習網址已填 altatech bot、Courses 第 30–33 列為 EXP-PRE／PRAC／SELF／POST。上線前唯讀檢查：27 堂一般課都有 AiQuiz（資安修正不會讓課完不了）；8 店名稱與 Users 部門一字不差（共 76 人；高雄中華店、高雄時代店不在 VisibleTo）。GitHub Pages 前端 index-CyYxNqgo.js。**未完成**：第 3 步（題目、snapshotParticipants）；正式 appsscript.json 沒有 `userinfo.email`，`previewOjtFileMigration`／`applyParticipantAdjustments` 呼叫 `Session.getEffectiveUser().getEmail()` 會「權限不足」失敗 → 改用 `_myEmail()`（DriveApp 根資料夾擁有者信箱，不需新權限）。11/19 clasp 重新登入後：staging `stagingCheckOjtMigration` 通過 → 正式部署 @57（上一版 @56）→ 正式 `previewOjtFileMigration`：要改 0、已符合 0、非我擁有 0、外部連結 5、找不到 3（第 3–5 列檔案已不存在）→ **沒有舊檔需要搬，不用跑 apply**。
 **2026/11/19 前端更新上正式**（GitHub Pages index-BisMZu17.js）：品項卡按鈕改「複製品名並開啟 AI 對練」、對練視窗接在該卡片下方（卡片展開整行）、移除「指定品項進度」；自主練習同樣接在按鈕下方。staging 加了 demo 帳號 T0005（測試市民＝台北市民店的類別與 8 款，密碼由使用者自填）。
 
+**2026/11/20 店長／督導看 AI 對練進度＋每月 25 號月報（staging 完成，未上正式）**
+長期方向（使用者 11/19）：這兩個月實驗是「先跑統計＋讓大家習慣」；之後由店長自己指定要練的品項、督導查看；**之後不再需要前後測**。
+- 角色：Users.Role 新增 `supervisor`（督導，唯讀）：左側只有「AI 對練進度」，看全部門市；不能 OJT 審核、部門報表、必修設定（API 本來就擋）。`manager` 在主管審核中心多「AI 對練進度」分頁，只看自己部門；開始日前或門市沒派品項就不顯示分頁。`admin` 全部可看，開始日前也可預覽。副作用：supervisor 不算 employee → 不會收到必修逾期通知、不計入部門報表人數。
+- API `getPracticeProgress`（Experiment.gs）；計算共用 `_expTeamData`（之後改成店長指定品項，只要換「哪些門市派了哪些品項」那段來源）。只回完成狀況：**不含測驗分數、不分類別／對照類**（研究欄位只在「實驗_檢核」）。達標＝累計正式 ≥ 每週次數 × 已過週數（上週不足可本週補）。「本月」＝最近一次 25 號起。
+- 月報：`sendMonthlyPracticeReport`（排程用 `setupMonthlyReportTrigger` 建，每月 25 號 08:00 台北），區間＝上月 25 日～本月 24 日（不早於開始日）。店長信＝自己門市摘要＋同仁明細；督導信＝各店總覽（達標率低→高，⚠＝人均低於應有進度）。開始日前、檔期結束後的區間不寄；涵蓋檔期結束那封＝「整期總結」（1/25）。`實驗_設定`「月報寄送」只有填「正式」才寄店長督導，其他一律只寄執行者自己（合成一封預覽，附每封收件人與沒填信箱名單）；同區間正式寄過不重寄；紀錄在「實驗_月報紀錄」。手動預覽 `previewMonthlyPracticeReport`。`_sendMail` staging 改寄時 htmlBody 也加註原收件人。
+- 驗證：staging `stagingSmokeTeam` 40 項、`stagingSmokeExperiment` 42 項、`stagingSmokeSecurity` 11 項全過；`stagingPreviewReport` 寄出預覽；本機 staging 前端用 `stagingIssueTokens` 產生的測試憑證以 T0006 督導／T0002 店長／T0003 員工實點（督導看兩店＋點店看明細、店長只看自己店、員工沒有入口）；模擬資料看過手機寬度與開始日前隱藏。staging 前端已部署。
+- **上正式步驟**：推正式後端（程式碼.js＋Experiment.js＋FinalData.js）→ 正式編輯器跑 `setupExperimentSheets`（補「月報寄送＝測試」與「實驗_月報紀錄」）→ `setupMonthlyReportTrigger` → Users 把督導 Role 改 `supervisor`（名單待使用者提供）→ 唯讀查店長／督導 Email 空白名單給使用者 → 前端 `npm run deploy`。第一封（12/25）先維持「測試」只寄使用者，確認後使用者自己改「正式」。
+
 效能備註：`getExperimentStatus` 每次讀約 8 張表，`submitPractice` 會算 3 次狀態，staging 單次約 2–4 秒；80 人規模可接受，若門市反映慢再加快取。
 
 注意：日期欄（開始日期、OpenFrom、DueDate）一律在試算表手打，程式以「台北的那一天」解讀；不要用程式寫 Date 物件。

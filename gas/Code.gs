@@ -80,6 +80,7 @@ function doPost(e) {
       getTest:             getTest,
       submitTest:          submitTest,
       submitPractice:      submitPractice,
+      getPracticeProgress: getPracticeProgress, // 店長／督導看 AI 對練進度
     };
 
     if (!handlers[action]) {
@@ -118,11 +119,12 @@ function _sendMail(opts) {
     Logger.log('[staging] 沒設定 STAGING_MAIL_TO，略過寄信：' + opts.subject);
     return;
   }
+  const notice = `（測試環境改寄。原收件人：${opts.to}）`;
   MailApp.sendEmail(Object.assign({}, opts, {
     to: to,
     subject: '[測試環境] ' + opts.subject,
-    body: `（測試環境改寄。原收件人：${opts.to}）\n\n` + opts.body
-  }));
+    body: notice + '\n\n' + opts.body
+  }, opts.htmlBody ? { htmlBody: `<p style="color:#b91c1c">${notice}</p>` + opts.htmlBody } : {}));
 }
 
 // ============================================================
