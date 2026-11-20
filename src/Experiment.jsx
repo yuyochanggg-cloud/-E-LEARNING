@@ -90,7 +90,7 @@ export function TestView({ course, userId, onSubmitted }) {
       {items.map((it, idx) => (
         <fieldset key={it.id} className="bg-white rounded-2xl border border-slate-200 p-5">
           <legend className="sr-only">第 {idx + 1} 題</legend>
-          <p className="font-bold text-slate-800 mb-4 leading-relaxed">
+          <p className="font-bold text-slate-800 mb-4 leading-relaxed whitespace-pre-line">
             <span className="text-blue-600 mr-2">{idx + 1}.</span>{it.question}
           </p>
           <div className="space-y-2">
