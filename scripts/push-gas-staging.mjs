@@ -14,6 +14,8 @@ copyFileSync(join(root, 'gas', 'Code.gs'), join(build, 'Code.js'));
 copyFileSync(join(root, 'gas', 'Experiment.gs'), join(build, 'Experiment.js'));
 // 題庫種子（gitignore，只在本機有）：有才推
 const seed = join(stagingDir, 'seed', 'SeedItems.js');
+const viewAcc = join(stagingDir, 'seed', 'ViewAccounts.js'); // 多視角測試帳號共用密碼
+if (existsSync(viewAcc)) copyFileSync(viewAcc, join(build, 'ViewAccounts.js'));
 if (existsSync(seed)) copyFileSync(seed, join(build, 'SeedItems.js'));
 // 門市對練定案資料（gitignore，只在本機有）：有才推
 const finalData = join(root, 'gas', 'seed', 'FinalData.js');

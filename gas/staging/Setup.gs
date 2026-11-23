@@ -30,8 +30,9 @@ const STAGING_USERS = [
 
 function _assertStagingSpreadsheet() {
   const users = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users');
-  if (users && users.getLastRow() > 20) {
-    throw new Error('Users 表超過 20 列，看起來不是測試試算表，停止執行。');
+  // 正式 Users 約 200 列；staging 含多視角測試帳號（setupViewDemo）約 30 列
+  if (users && users.getLastRow() > 60) {
+    throw new Error('Users 表超過 60 列，看起來不是測試試算表，停止執行。');
   }
 }
 
@@ -556,8 +557,92 @@ function replaceTestItemsFromSeed() {
 // 本機 staging 前端把憑證放進 localStorage 就能以該身分進站，不需要輸入密碼。
 function stagingIssueTokens() {
   _assertStagingSpreadsheet();
-  ['T0002', 'T0003', 'T0006'].forEach(id => {
+  ['T0002', 'T0003', 'T0006', 'V-SC-E', 'V-SC-M', 'V-SUP'].forEach(id => {
     const u = _getUserInfo(id);
     Logger.log(`${id} ${u ? u.role : '?'} TOKEN=${_generateSessionToken(id)}`);
   });
+}
+
+// ============================================================
+// 多視角測試帳號（只限 staging）：8 家定案門市各一個「店員」「店長」「示範同仁」，加一個「督導」。
+//   店員／店長：沒有任何紀錄，可以從前測開始自己走一遍。
+//   示範同仁：已交前測、塞了不同次數的正式練習，讓店長／督導的進度頁有達標、落後可看（不用登入）。
+// 共用密碼放在 gas/staging/seed/ViewAccounts.js（gitignore，只在本機有，推 staging 時一起帶上）。
+// 會先重建實驗示範資料（setupExperimentDemo），再把 8 家店加進分派、品項、課程可見範圍。
+// 冒煙測試會清掉實驗資料，跑完冒煙測試後再執行一次本函式即可恢復（帳號不會重複建立）。
+// ============================================================
+function setupViewDemo() {
+  _assertStagingSpreadsheet();
+  const fin = _expFinal();
+  if (!fin) throw new Error('缺 gas/seed/FinalData.js');
+  const pw = (typeof _stagingViewPassword === 'function') ? _stagingViewPassword() : '';
+  if (!pw) throw new Error('缺 gas/staging/seed/ViewAccounts.js（共用密碼）');
+
+  setupExperimentDemo();
+
+  // 分派與品項：加上 8 家真實店名（測試三創／測試中壢照舊，給冒煙測試用）
+  const assign = _expRead(EXP_SHEETS.ASSIGN);
+  assign.sheet.getRange(assign.sheet.getLastRow() + 1, 1, fin.assign.length, 3).setValues(fin.assign);
+  const rows = _expFinalItemRows();
+  const pitems = _expRead(EXP_SHEETS.PITEMS);
+  pitems.sheet.getRange(pitems.sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+
+  // 課程可見範圍加上 8 家店
+  const stores = fin.items.map(([prefix, store]) => ({ prefix, store }));
+  const courses = getSheet(SHEET_NAMES.COURSES);
+  const { cols, rows: cRows } = _readSheet(courses);
+  for (let i = 1; i < cRows.length; i++) {
+    if (String(cRows[i][cols.CourseId]).indexOf('EXP-') !== 0) continue;
+    const vis = String(cRows[i][cols.VisibleTo] || '');
+    courses.getRange(i + 1, cols.VisibleTo + 1).setValue([vis].concat(stores.map(s => s.store)).filter(Boolean).join(','));
+  }
+  _invalidateCourseCache();
+
+  // 帳號
+  _stagingUpsertUser('V-SUP', '督導（測試）', 'supervisor', '測試營業通路處', pw);
+  const forms = [];
+  stores.forEach(({ prefix, store }, i) => {
+    _stagingUpsertUser(`V-${prefix}-E`, `${store} 店員`, 'employee', store, pw);
+    _stagingUpsertUser(`V-${prefix}-M`, `${store} 店長`, 'manager', store, pw);
+    _stagingUpsertUser(`V-${prefix}-D`, `${store} 示範同仁`, 'employee', store, pw);
+    forms.push([`V-${prefix}-E`, i % 2 ? 'B' : 'A', `${store} 店員`, store], [`V-${prefix}-M`, i % 2 ? 'A' : 'B', `${store} 店長`, store],
+      [`V-${prefix}-D`, 'A', `${store} 示範同仁`, store]);
+  });
+  const f = _expRead(EXP_SHEETS.FORMS);
+  f.sheet.getRange(f.sheet.getLastRow() + 1, 1, forms.length, 4).setValues(forms);
+  snapshotParticipants();
+
+  // 示範同仁：已交前測＋各店不同的正式練習次數（每天最多 2 次，從開始日隔天起排）
+  const cfg = _expConfig();
+  const counts = [4, 2, 1, 0, 3, 2, 0, 5];
+  const prac = [], resp = [];
+  stores.forEach(({ prefix, store }, i) => {
+    const uid = `V-${prefix}-D`, name = `${store} 示範同仁`;
+    resp.push({ '作答時間': new Date(cfg.start.getTime() + 86400000), '工號': uid, '姓名': name, '門市': store, '階段': 'pre', '卷別': 'A', '題號': 'DEMO', '作答': '', '正解': '', '是否答對': '' });
+    const items = _expPracticeItems(store, _expStoreCategories(store), cfg);
+    for (let k = 0; k < counts[i % counts.length] && k < items.length; k++) {
+      const d = new Date(cfg.start.getTime() + (1 + Math.floor(k / 2)) * 86400000 + 10 * 3600000);
+      if (d > new Date()) break;
+      const it = items[k % items.length];
+      prac.push({ '回報時間': d, '工號': uid, '姓名': name, '門市': store, '週次': _expWeekNo(cfg.start, d), '類型': '正式',
+        '類別': it.category, '品項編號': it.id, '品項名稱': it.name, '備註': 'demo' });
+    }
+  });
+  if (resp.length) _expAppend(EXP_SHEETS.RESPONSES, resp);
+  if (prac.length) _expAppend(EXP_SHEETS.PRACTICE, prac);
+  Logger.log(`✅ 多視角測試帳號就緒：督導 1、門市 ${stores.length} 家 × 店員／店長／示範同仁；示範練習 ${prac.length} 筆。帳號清單見本機 gas/staging/seed/`);
+}
+
+function _stagingUpsertUser(id, name, role, dept, pw) {
+  const sheet = getSheet(SHEET_NAMES.USERS);
+  const { cols, rows } = _readSheet(sheet);
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][cols.UserId]).trim() !== id) continue;
+    const set = (k, v) => sheet.getRange(i + 1, cols[k] + 1).setValue(v);
+    set('Name', name); set('Role', role); set('Department', dept); set('Password', pw); set('IsFirstLogin', false);
+    return;
+  }
+  const email = PropertiesService.getScriptProperties().getProperty('STAGING_MAIL_TO') || '';
+  sheet.appendRow(_buildRow(cols, { UserId: id, Email: email, Name: name, Role: role, CreatedAt: new Date(),
+    Password: pw, IsFirstLogin: false, Department: dept }));
 }
