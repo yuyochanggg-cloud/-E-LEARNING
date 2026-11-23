@@ -121,6 +121,7 @@
 - **2026/11/23 督導＋月報已上正式**：clasp 又 `invalid_rapt` → 重新登入 → gas_safe_push（線上已與本機相同，快照更新）→ 正式編輯器 `setupExperimentSheets`（建立「實驗_月報紀錄」；「月報寄送」預設「測試」）→ `setupMonthlyReportTrigger`（每月 25 號 08:00）→ 版本 58、正式部署 @57→@58（未登入呼叫 `getPracticeProgress` 正確回「登入已逾期」）→ Users 督導 3 人 Role 改 `supervisor`（manager 28→25）→ 前端 GitHub Pages index-BwqSG69u.js。退版：`clasp update-deployment AKfycbxTcxKo... -V 57`。
 - 11/23 正式：督導共 4 人（營業通路處，含處長秘書；業務部經理不列）。參與者快照 77 人、A/B 卷已分派（刪掉混入的測試帳號；該帳號 Users 部門仍是門市，11/30 再跑快照會被加回，需改部門或再刪）。Users 標題列曾被誤改導致快照 0 人／登入失效，已修回 → 建議保護第 1 列。
 - **staging 多視角測試帳號**（`setupViewDemo`，Setup.gs）：8 家定案門市各 `V-<代碼>-E` 店員、`V-<代碼>-M` 店長、`V-<代碼>-D` 示範同仁（已交前測＋不同練習次數），加 `V-SUP` 督導；共用密碼在 `gas/staging/seed/ViewAccounts.js`、清單在 `gas/staging/seed/測試帳號清單.md`（皆 gitignore）。冒煙測試會清實驗資料 → 跑完再執行 `setupViewDemo`。`_assertStagingSpreadsheet` 門檻 20→60 列。staging 編輯器若報「找不到工作表 <數字>」→ 先開 staging 試算表點任一分頁再跑。已用憑證實點督導（10 店總覽）、三創店長（只看本店 3 人、新品項）、三創店員（前測入口）。
+- **staging 題庫已換假題（11/23）**：`gas/staging/seed/SeedItems.js`（gitignore）改為 56 題明顯標示「測試假題，與正式卷無關」的數字題（題號 `FAKE-<類>-<卷><序>`、四類 × A/B 各 7 題、答案 ABCD 各 14），取代原 v2 候選題（約 5 題與正式卷相近，而 staging 試算表全公司可看）。已推 staging（部署 @15）並重跑 `setupViewDemo`，讀回 `實驗_題目` 56 列全為假題。注意：staging 試算表／GAS 的「版本記錄」仍留有舊題，只有編輯者看得到。
 - 前端：測驗題幹加 `whitespace-pre-line`（A05、B05 題幹有換行列四把鍵盤規格），要在 11/30 前隨前端部署；因 main 已含督導前端，須與督導後端一起上。
 
 效能備註：`getExperimentStatus` 每次讀約 8 張表，`submitPractice` 會算 3 次狀態，staging 單次約 2–4 秒；80 人規模可接受，若門市反映慢再加快取。
