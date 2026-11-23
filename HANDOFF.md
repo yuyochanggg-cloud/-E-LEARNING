@@ -123,6 +123,7 @@
 - **staging 多視角測試帳號**（`setupViewDemo`，Setup.gs）：8 家定案門市各 `V-<代碼>-E` 店員、`V-<代碼>-M` 店長、`V-<代碼>-D` 示範同仁（已交前測＋不同練習次數），加 `V-SUP` 督導；共用密碼在 `gas/staging/seed/ViewAccounts.js`、清單在 `gas/staging/seed/測試帳號清單.md`（皆 gitignore）。冒煙測試會清實驗資料 → 跑完再執行 `setupViewDemo`。`_assertStagingSpreadsheet` 門檻 20→60 列。staging 編輯器若報「找不到工作表 <數字>」→ 先開 staging 試算表點任一分頁再跑。已用憑證實點督導（10 店總覽）、三創店長（只看本店 3 人、新品項）、三創店員（前測入口）。
 - **staging 題庫已換假題（11/23）**：`gas/staging/seed/SeedItems.js`（gitignore）改為 56 題明顯標示「測試假題，與正式卷無關」的數字題（題號 `FAKE-<類>-<卷><序>`、四類 × A/B 各 7 題、答案 ABCD 各 14），取代原 v2 候選題（約 5 題與正式卷相近，而 staging 試算表全公司可看）。已推 staging（部署 @15）並重跑 `setupViewDemo`，讀回 `實驗_題目` 56 列全為假題。注意：staging 試算表／GAS 的「版本記錄」仍留有舊題，只有編輯者看得到。
 - **11/23 正式 Users 測試帳號處理**：三創測試帳號（第 200 列）部門由門市名改為「測試」，11/30 再跑 `snapshotParticipants` 不會被加回；讀回確認，實驗_參與者／卷別分配仍各 77 人、無測試帳號。正式角色核對（只讀）：8 家實驗門市各有 1 位 manager，營業通路處 4 位 supervisor。正式店長／督導實際登入畫面尚未驗證（需本人或使用者登入）。
+- **11/23 開跑前檢查（只讀）**：實驗_設定 開始 2026/11/30、8 週、每品項 2 次／每週 2／每日 2；練習網址＝使用者確認的正式 bot；8 店 × 2 類 × 4 品項＝64 列全啟用；EXP-PRE／PRAC／SELF 開放 11/30、EXP-POST 2027/01/18（VisibleTo 用「、」分隔，程式支援）；名單／卷別 77 人（A40／B37）與 Users 8 店人數一致；GAS @58、前端 index-BwqSG69u.js。待辦：77 人中 69 人 LastLogin 空白（含 6 位店長）→ 建議開課前發登入通知；bot 是否已有 KC200／G515 待確認。
 - 前端：測驗題幹加 `whitespace-pre-line`（A05、B05 題幹有換行列四把鍵盤規格），要在 11/30 前隨前端部署；因 main 已含督導前端，須與督導後端一起上。
 
 效能備註：`getExperimentStatus` 每次讀約 8 張表，`submitPractice` 會算 3 次狀態，staging 單次約 2–4 秒；80 人規模可接受，若門市反映慢再加快取。
