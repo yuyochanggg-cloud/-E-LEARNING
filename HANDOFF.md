@@ -117,6 +117,8 @@
 - **上正式步驟**：推正式後端（程式碼.js＋Experiment.js＋FinalData.js）→ 正式編輯器跑 `setupExperimentSheets`（補「月報寄送＝測試」與「實驗_月報紀錄」）→ `setupMonthlyReportTrigger` → Users 把督導 Role 改 `supervisor`（名單待使用者提供）→ 唯讀查店長／督導 Email 空白名單給使用者 → 前端 `npm run deploy`。第一封（12/25）先維持「測試」只寄使用者，確認後使用者自己改「正式」。
 
 **2026/11/20 A/B 卷題目已貼進正式「實驗_題目」**：來源＝使用者提供的 `Store_Test_AB_Reviewed_Package.zip`（Codex 產出，`Final_56Q_Import.csv`；含答案，不進 repo）。題號 A01–A28／B01–B28；子類對應「無線網路→無線網路（路由器＋Mesh）」「物聯網攝影機→物聯網（攝影機）」；全部啟用 TRUE。貼上後以 gviz 讀回逐字比對 SHA-256 與來源一致；正式 `checkTestItems` 通過（四類 A7／B7）。答案鍵與套件盲審作答 56 題一致；正解 ABCD 各 7 題。正式 `previewTestForms`（只讀）：8 店共 77 人待分配，各店 A/B 差 ≤1。**`assignTestForms` 尚未執行**（等使用者確認）；之後新進人員再跑一次只會補沒卷別的人。
+- 11/20 正式 Users 的 Email 欄依公司 Workspace 帳號清單（使用者提供，含個資不進 repo）以姓名比對補齊：空白補公司信箱 59 筆、改 2 筆（使用者指定），讀回逐列比對工號／姓名／Email 全符合；Email 空白 155 → 96。影響：這些人登入不再跳補填信箱視窗，並開始收得到系統通知信（必修逾期等）。督導 3 人（營業通路處，目前 Role＝manager，該部門無一般員工）Email 皆為公司信箱，待上正式時改 `supervisor`。另有 1 人有公司帳號但 Users 無資料，待使用者給工號新增。
+- **2026/11/23 督導＋月報已上正式**：clasp 又 `invalid_rapt` → 重新登入 → gas_safe_push（線上已與本機相同，快照更新）→ 正式編輯器 `setupExperimentSheets`（建立「實驗_月報紀錄」；「月報寄送」預設「測試」）→ `setupMonthlyReportTrigger`（每月 25 號 08:00）→ 版本 58、正式部署 @57→@58（未登入呼叫 `getPracticeProgress` 正確回「登入已逾期」）→ Users 督導 3 人 Role 改 `supervisor`（manager 28→25）→ 前端 GitHub Pages index-BwqSG69u.js。退版：`clasp update-deployment AKfycbxTcxKo... -V 57`。
 - 前端：測驗題幹加 `whitespace-pre-line`（A05、B05 題幹有換行列四把鍵盤規格），要在 11/30 前隨前端部署；因 main 已含督導前端，須與督導後端一起上。
 
 效能備註：`getExperimentStatus` 每次讀約 8 張表，`submitPractice` 會算 3 次狀態，staging 單次約 2–4 秒；80 人規模可接受，若門市反映慢再加快取。
