@@ -214,7 +214,9 @@ function stagingSmokeExperiment() {
   check('交前測後 pretestDone', s.pretestDone === true);
   check('前測不能交第二次', submitTest({ userId: 'T0004', courseId: 'EXP-PRE', answers: ans, sessionToken: tk }).status === 'error');
   check('今天派 2 款新的、兩類各一', s.today.length === 2 && s.today[0].category !== s.today[1].category, s.today.map(i => i.id).join(','));
-  check('本週額度 2', s.weekQuota === 2 && s.weekRemaining === 2);
+  // 本週額度＝每週次數＋上週沒練滿的次數（staging 開始日固定，第 2 週起新帳號會多上週的份）
+  const quota0 = 2 + (s.weekNo > 1 ? 2 : 0);
+  check('本週額度＝每週 2 次＋上週沒補的', s.weekQuota === quota0 && s.weekRemaining === quota0, `第 ${s.weekNo} 週 ${s.weekQuota}/${s.weekRemaining}`);
   const again = getExperimentStatus({ userId: 'T0004', sessionToken: tk }).data;
   check('同一天重查派題不變', again.today.map(i => i.id).join() === s.today.map(i => i.id).join());
 
@@ -233,7 +235,24 @@ function stagingSmokeExperiment() {
   check('自主練習可自由輸入主推商品', s.selfTotal === 2 && s.formalDone === 1);
   check('自主練習選單有 5 個類別、建議清單＝品項表不重複名稱', s.selfCategories.length === 5 && s.knownProducts.length === _expKnownProducts().length && s.knownProducts.length > 0);
   s = submitPractice({ userId: 'T0004', itemId: t1.id, kind: 'formal', sessionToken: tk }).data;
-  check('今天兩款都做完 → 本週額度用完', s.formalDone === 2 && s.today.every(i => i.doneToday) && s.weekRemaining === 0);
+  check('今天兩款都做完 → 清單只剩已完成、本週額度扣 2', s.formalDone === 2 && s.today.every(i => i.doneToday) && s.weekRemaining === quota0 - 2);
+
+  // 今日清單不超過當天空位（純計算）：上週 4 款各練 1 次 → 本週 4 款都待補第 2 次，但一天只能 2 次
+  {
+    const its = [{ id: 'A', category: 'X' }, { id: 'B', category: 'Y' }, { id: 'C', category: 'X' }, { id: 'D', category: 'Y' }];
+    const cf = { start: new Date('2026-11-09T00:00:00+08:00'), perWeek: 2, dailyMax: 2, perItem: 2 };
+    const day = new Date('2026-11-19T10:00:00+08:00');
+    const hist = [{ type: '正式', id: 'C', day: '2026-11-10' }, { type: '正式', id: 'A', day: '2026-11-11' },
+                  { type: '正式', id: 'D', day: '2026-11-12' }, { type: '正式', id: 'B', day: '2026-11-13' }];
+    let st = _expComputeState('U', hist, its, cf, day);
+    check('待補第 2 次比空位多 → 清單只列空位數、先排最早練的', st.todayList.join() === 'C,A', st.todayList.join());
+    st = _expComputeState('U', hist.concat([{ type: '正式', id: 'C', day: '2026-11-19' }]), its, cf, day);
+    check('練完 1 款後清單不變', st.todayList.join() === 'C,A', st.todayList.join());
+    st = _expComputeState('U', hist.concat([{ type: '正式', id: 'C', day: '2026-11-19' }, { type: '正式', id: 'A', day: '2026-11-19' }]), its, cf, day);
+    check('本週練滿 → 清單只剩已完成的卡', st.todayList.join() === 'C,A' && st.todayList.every(id => st.todayDone[id]) && st.weekRemaining === 0, st.todayList.join());
+    st = _expComputeState('U', hist.concat([{ type: '正式', id: 'C', day: '2026-11-18' }]), its, cf, day);
+    check('本週已練 1 次（前幾天）→ 今天只剩 1 個空位', st.todayList.join() === 'A', st.todayList.join());
+  }
   check('本週練滿後不能再正式回報', submitPractice({ userId: 'T0004', itemId: other.id, kind: 'formal', sessionToken: tk }).status === 'error');
 
   // 補「過去日期」的正式紀錄到剩 1 次，模擬前幾週

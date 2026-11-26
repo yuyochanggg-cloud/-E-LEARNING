@@ -443,7 +443,11 @@ function _expComputeState(uid, records, items, cfg, now) {
       started[x.it.category] = (started[x.it.category] || 0) + 1;
     }
   }
-  const todayList = slots > 0 ? pinned.concat(picks) : [];
+  // 清單不超過今天的空位：第 2 次待補的款太多時，先排第 1 次最早的，其餘留到之後幾天。
+  // 只看今天之前的紀錄排序，所以當天清單固定、當天練過的款一定還在清單裡；
+  // 練滿當天上限或本週額度後，清單只剩已完成的卡，不會再出現可以按的卡。
+  pinned.sort((a, b) => (firstDay[a] < firstDay[b] ? -1 : firstDay[a] > firstDay[b] ? 1 : 0));
+  const todayList = slots > 0 ? pinned.concat(picks).slice(0, slots) : [];
 
   const missedWeeks = [];
   for (let w = 1; w < weekNo; w++) if ((weekCount[w] || 0) < cfg.perWeek) missedWeeks.push(w);
