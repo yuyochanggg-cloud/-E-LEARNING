@@ -726,3 +726,62 @@ function stagingCheckFormulaInjection() {
   Logger.log(results.join('\n'));
   Logger.log(results.some(x => x.indexOf('FAIL') === 0) ? '❌ 有失敗項目' : `✅ 全部 ${results.length} 項通過`);
 }
+
+// 密碼雜湊驗證（只限 staging，2026/11/26）：用暫時帳號 T9PW 走完「HR 打明碼 → 登入 → 轉雜湊 → 登入 → 改密碼（可同舊）→ HR 重設」，
+// 只轉 T9PW 這一列（不動其他測試帳號的密碼），測完刪掉。
+function stagingCheckPasswordHash() {
+  _assertStagingSpreadsheet();
+  const results = [];
+  const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? '：' + extra : ''}`);
+  const sheet = getSheet(SHEET_NAMES.USERS);
+  const uid = 'T9PW';
+  const cols = _readSheet(sheet).cols;
+  const rowOf = () => { const r = _readSheet(sheet).rows; for (let i = 1; i < r.length; i++) if (String(r[i][cols.UserId]).trim() === uid) return i + 1; return -1; };
+  if (rowOf() > 0) sheet.deleteRow(rowOf());
+  sheet.appendRow(_buildRow(cols, { UserId: uid, Name: '密碼測試', Role: 'employee', CreatedAt: new Date(), Password: 'pw-1234', IsFirstLogin: true, Department: '測試管理部' }));
+  SpreadsheetApp.flush();
+  const cell = () => String(sheet.getRange(rowOf(), cols.Password + 1).getValue());
+  const login = pw => verifyLogin({ userId: uid, password: pw }).status === 'success';
+  try {
+    check('明碼（HR 剛打）可以登入', login('pw-1234'));
+    check('錯的密碼登不進去', !login('wrong'));
+    _clearLoginFailures(uid);
+
+    let t = Date.now(); const h = _makePasswordHash('x'); const tHash = Date.now() - t;
+    t = Date.now(); _passwordMatches('x', h); const tMatch = Date.now() - t;
+    check('雜湊與比對速度可接受（各 < 0.4 秒）', tHash < 400 && tMatch < 400, `產生 ${tHash}ms、比對 ${tMatch}ms`);
+    check('同一密碼每次雜湊都不同（每人隨機鹽）', _makePasswordHash('x') !== h && _passwordMatches('x', h));
+
+    check('預覽：T9PW 有 1 筆待轉', _convertPlainPasswords(false, uid) === 1);
+    _convertPlainPasswords(true, uid);
+    check('轉換後：試算表看不到明碼', cell().indexOf('h2$') === 0 && cell().indexOf('pw-1234') === -1, cell().slice(0, 12) + '…');
+    check('轉換後：原密碼照樣登入', login('pw-1234'));
+    check('轉換後：錯的密碼登不進去', !login('pw-12345'));
+    _clearLoginFailures(uid);
+    check('再轉一次不會重複處理', _convertPlainPasswords(false, uid) === 0);
+
+    const tk = _generateSessionToken(uid);
+    check('首次改密碼：可以跟原本一樣（使用者決定不強制）', changePassword({ userId: uid, newPassword: 'pw-1234', sessionToken: tk }).status === 'success' && login('pw-1234'));
+    check('改密碼後存的是雜湊', cell().indexOf('h2$') === 0);
+    check('新密碼空白會被擋', changePassword({ userId: uid, oldPassword: 'pw-1234', newPassword: '  ', sessionToken: tk }).status === 'error');
+    check('改成新密碼（要輸入正確舊密碼）', changePassword({ userId: uid, oldPassword: 'pw-1234', newPassword: '=1+1', sessionToken: tk }).status === 'success');
+    check('新密碼可登入、舊密碼不行', login('=1+1') && !login('pw-1234'), cell().slice(0, 12) + '…');
+    _clearLoginFailures(uid);
+    check('舊密碼錯就不能改', changePassword({ userId: uid, oldPassword: 'nope', newPassword: 'x', sessionToken: tk }).status === 'error');
+
+    // HR 重設：直接在試算表打臨時密碼＋IsFirstLogin=TRUE
+    sheet.getRange(rowOf(), cols.Password + 1).setValue('reset-0315');
+    sheet.getRange(rowOf(), cols.IsFirstLogin + 1).setValue(true);
+    SpreadsheetApp.flush();
+    const r = verifyLogin({ userId: uid, password: 'reset-0315' });
+    check('HR 重設後：臨時密碼馬上能登入、會被要求改密碼', r.status === 'success' && r.data.isFirstLogin === true);
+    _convertPlainPasswords(true, uid);
+    check('HR 重設後：排程轉成雜湊、臨時密碼仍可登入', cell().indexOf('h2$') === 0 && login('reset-0315'));
+    check('舊格式 sha256: 仍可比對', _passwordMatches('abc', _hashPassword('abc')) && !_passwordMatches('abd', _hashPassword('abc')));
+  } finally {
+    _clearLoginFailures(uid);
+    if (rowOf() > 0) sheet.deleteRow(rowOf());
+  }
+  Logger.log(results.join('\n'));
+  Logger.log(results.some(x => x.indexOf('FAIL') === 0) ? '❌ 有失敗項目' : `✅ 全部 ${results.length} 項通過`);
+}

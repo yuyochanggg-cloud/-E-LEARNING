@@ -305,46 +305,101 @@ function _isValidEmail(v) {
 }
 
 // ============================================================
-// 密碼比對
+// 密碼（2026/11/26 改存雜湊，使用者決定）
 //
-// 【目前設計：密碼以明碼存放，這是使用者刻意選擇的取捨】
-// 原因：HR 需要能直接在 Sheet 上查看員工密碼以協助忘記密碼的同仁。
-// 代價：任何能開啟這份 Sheet 的人都看得到全公司密碼，請把 Sheet 的
-//      共用權限控制在最少人。
+// Users.Password 存「h2$次數$鹽$雜湊」：每人一組隨機鹽，SHA-256 重複計算，無法反推回原密碼。
+// 登入時把輸入的密碼用同樣方式算一次再比對，同仁登入的感覺不變。
 //
-// 下面的 hash 相關函式「不會主動把密碼轉成 hash」，只保留驗證能力：
-// 萬一 Sheet 裡有任何一筆密碼曾經被轉成 hash（例如測試期間），
-// 那位同仁還是能正常登入，不會被鎖在門外。
-// 之後若改變決定要改存 hash，把 verifyLogin 登入成功後與 changePassword
-// 的寫入改成 _hashPassword(...) 即可，比對邏輯不用動。
+// HR 的做法：
+//   - 新增同仁、或同仁忘記密碼要重設：照舊直接在 Users 的 Password 欄打一組臨時密碼（例如生日），
+//     IsFirstLogin 設 TRUE（登入後會要求改密碼）。
+//   - 排程 hashPlainPasswords 每 10 分鐘把 Password 欄的明碼轉成雜湊（轉之前用明碼也能登入）。
+//   - 轉完之後 HR 就看不到密碼了；同仁忘記時只能重設，不能查。
+// 排程用 setupPasswordHashTrigger 建一次。第一次上線時先執行 previewPlainPasswords 看筆數，
+// 再執行 hashPlainPasswords（或等排程）。
+// 舊格式「sha256:」（全站共用鹽）仍可比對，同仁下次改密碼時會換成新格式。
 // ============================================================
 const HASH_PREFIX = 'sha256:';
+const HASH2_PREFIX = 'h2$';
+const HASH2_ITER = 200; // 2000 次實測產生 1.4 秒／比對 1.1 秒，太慢；200 次約 0.1 秒。生日這類短密碼主要靠每人隨機鹽＋試算表權限保護
 
 function _passwordSalt() {
   return PropertiesService.getScriptProperties().getProperty('PASSWORD_SALT') || 'lx-academy-default-salt';
 }
 
 function _isHashedPassword(stored) {
-  return String(stored || '').indexOf(HASH_PREFIX) === 0;
+  const s = String(stored || '');
+  return s.indexOf(HASH_PREFIX) === 0 || s.indexOf(HASH2_PREFIX) === 0;
 }
 
+function _hex(bytes) {
+  return bytes.map(b => { const v = (b < 0 ? b + 256 : b).toString(16); return v.length === 1 ? '0' + v : v; }).join('');
+}
+
+// 舊格式（只用來比對，不再寫入）
 function _hashPassword(plain) {
-  const bytes = Utilities.computeDigest(
-    Utilities.DigestAlgorithm.SHA_256,
-    String(plain) + _passwordSalt(),
-    Utilities.Charset.UTF_8
-  );
-  // 轉成 hex 字串
-  const hex = bytes.map(b => {
-    const v = (b < 0 ? b + 256 : b).toString(16);
-    return v.length === 1 ? '0' + v : v;
-  }).join('');
-  return HASH_PREFIX + hex;
+  return HASH_PREFIX + _hex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(plain) + _passwordSalt(), Utilities.Charset.UTF_8));
+}
+
+function _hash2(plain, salt, iter) {
+  let h = _hex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + '|' + String(plain), Utilities.Charset.UTF_8));
+  for (let i = 1; i < iter; i++) {
+    h = _hex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, h + salt, Utilities.Charset.UTF_8));
+  }
+  return h;
+}
+
+// 新密碼一律用這個寫入
+function _makePasswordHash(plain) {
+  const salt = Utilities.getUuid().replace(/-/g, '');
+  return HASH2_PREFIX + HASH2_ITER + '$' + salt + '$' + _hash2(plain, salt, HASH2_ITER);
 }
 
 function _passwordMatches(input, stored) {
-  if (_isHashedPassword(stored)) return _hashPassword(input) === stored;
-  return input === String(stored || '').trim(); // 還沒升級的明碼
+  const s = String(stored || '').trim();
+  if (s.indexOf(HASH2_PREFIX) === 0) {
+    const p = s.split('$'); // h2 | 次數 | 鹽 | 雜湊
+    return p.length === 4 && _hash2(input, p[2], Number(p[1]) || HASH2_ITER) === p[3];
+  }
+  if (s.indexOf(HASH_PREFIX) === 0) return _hashPassword(input) === s;
+  return input === s; // 還沒轉的明碼（HR 剛打進去、排程還沒跑）
+}
+
+// 把 Users.Password 欄的明碼轉成雜湊。apply=false 只數筆數不改。
+function _convertPlainPasswords(apply, onlyUid) { // onlyUid：只轉這個工號（staging 測試用）
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) { Logger.log('鎖忙碌，這次先略過'); return 0; }
+  try {
+    const sheet = getSheet(SHEET_NAMES.USERS);
+    const { cols, rows } = _readSheet(sheet);
+    let n = 0, blank = 0, left = 0;
+    const t0 = Date.now();
+    for (let i = 1; i < rows.length; i++) {
+      const rowUid = String(rows[i][cols.UserId] || '').trim();
+      if (!rowUid || (onlyUid && rowUid !== onlyUid)) continue;
+      const raw = rows[i][cols.Password];
+      const pw = String(raw === null || raw === undefined ? '' : raw).trim();
+      if (!pw) { blank++; continue; }
+      if (_isHashedPassword(pw)) continue;
+      if (apply && Date.now() - t0 > 240000) { left++; continue; } // 單次最多跑 4 分鐘，剩下的下一輪（10 分鐘後）再轉
+      n++;
+      if (apply) sheet.getRange(i + 1, cols.Password + 1).setValue(_makePasswordHash(pw));
+    }
+    if (apply && n) SpreadsheetApp.flush();
+    Logger.log(`${apply ? '已轉成雜湊' : '待轉（預覽，沒有修改）'}：${n} 筆；密碼空白 ${blank} 筆${left ? `；超過時間留到下一輪 ${left} 筆` : ''}`);
+    return n;
+  } finally {
+    lock.releaseLock();
+  }
+}
+function previewPlainPasswords() { return _convertPlainPasswords(false); }
+function hashPlainPasswords() { return _convertPlainPasswords(true); }
+
+// 每 10 分鐘自動把明碼轉成雜湊。執行一次即可，重跑會先刪掉舊的
+function setupPasswordHashTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => { if (t.getHandlerFunction() === 'hashPlainPasswords') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('hashPlainPasswords').timeBased().everyMinutes(10).create();
+  Logger.log('✅ 已建立每 10 分鐘把明碼轉成雜湊的排程');
 }
 
 // ------------------------------------------------------------
@@ -439,6 +494,7 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
   if (notifyEmail && !_isValidEmail(notifyEmail)) {
     return { status: 'error', message: '請輸入有效的信箱' };
   }
+  if (!String(newPassword || '').trim()) return { status: 'error', message: '請輸入新密碼' };
 
   const sheet = getSheet(SHEET_NAMES.USERS);
   const { cols, rows } = _readSheet(sheet);
@@ -461,7 +517,7 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
       return { status: 'error', message: '系統忙碌中，請稍後再試一次' };
     }
     try {
-      sheet.getRange(i + 1, cols.Password + 1).setValue(_cellSafe(String(newPassword)));
+      sheet.getRange(i + 1, cols.Password + 1).setValue(_makePasswordHash(String(newPassword).trim())); // 存雜湊，不存明碼
       sheet.getRange(i + 1, cols.IsFirstLogin + 1).setValue(false);
       if (notifyEmail) {
         sheet.getRange(i + 1, cols.Email + 1).setValue(_cellSafe(String(notifyEmail).trim()));
