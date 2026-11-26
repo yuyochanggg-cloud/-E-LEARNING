@@ -176,6 +176,7 @@ function setupExperimentDemo() {
   courses.getRange(courses.getLastRow() + 1, 1, values.length, width).setValues(values);
   _invalidateCourseCache();
   snapshotParticipants();
+  expClearCache();
   Logger.log('✅ 實驗示範資料重建完成：品項 ' + items.length + '、題目 ' + seed[EXP_SHEETS.ITEMS].length + ' 題、課程 ' + demo.length + ' 堂');
 }
 
@@ -550,6 +551,7 @@ function replaceTestItemsFromSeed() {
   if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
   sheet.getRange(2, 1, SEED_TEST_ITEMS.length, SEED_TEST_ITEMS[0].length).setValues(SEED_TEST_ITEMS);
   const a = SEED_TEST_ITEMS.filter(r => r[2] === 'A').length;
+  expClearCache();
   Logger.log(`✅ 實驗_題目 已換成 ${SEED_TEST_ITEMS.length} 題（A 卷 ${a}、B 卷 ${SEED_TEST_ITEMS.length - a}）`);
 }
 
@@ -561,6 +563,31 @@ function stagingIssueTokens() {
     const u = _getUserInfo(id);
     Logger.log(`${id} ${u ? u.role : '?'} TOKEN=${_generateSessionToken(id)}`);
   });
+}
+
+// 壓力測試用（只限 staging）：替所有測試帳號（T0 開頭、V- 開頭）產生登入憑證（6 小時有效），
+// 寫到「壓測_憑證」分頁，給本機 scripts/load-test.mjs 讀。測完執行 stagingLoadTestCleanup 刪掉分頁。
+function stagingIssueLoadTestTokens() {
+  _assertStagingSpreadsheet();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const { cols, rows } = _readSheet(ss.getSheetByName('Users'));
+  const out = [['工號', '角色', '部門', '憑證']];
+  for (let i = 1; i < rows.length; i++) {
+    const id = String(rows[i][cols.UserId]).trim();
+    if (!/^(T0|V-)/.test(id)) continue;
+    out.push([id, String(rows[i][cols.Role] || ''), String(rows[i][cols.Department] || ''), _generateSessionToken(id)]);
+  }
+  let sh = ss.getSheetByName('壓測_憑證');
+  if (sh) sh.clear(); else sh = ss.insertSheet('壓測_憑證');
+  sh.getRange(1, 1, out.length, 4).setValues(out);
+  Logger.log('✅ 已產生 ' + (out.length - 1) + ' 組憑證（6 小時有效），寫在「壓測_憑證」');
+}
+
+function stagingLoadTestCleanup() {
+  _assertStagingSpreadsheet();
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('壓測_憑證');
+  if (sh) SpreadsheetApp.getActiveSpreadsheet().deleteSheet(sh);
+  Logger.log('✅ 已刪除「壓測_憑證」');
 }
 
 // ============================================================
@@ -630,6 +657,7 @@ function setupViewDemo() {
   });
   if (resp.length) _expAppend(EXP_SHEETS.RESPONSES, resp);
   if (prac.length) _expAppend(EXP_SHEETS.PRACTICE, prac);
+  expClearCache();
   Logger.log(`✅ 多視角測試帳號就緒：督導 1、門市 ${stores.length} 家 × 店員／店長／示範同仁；示範練習 ${prac.length} 筆。帳號清單見本機 gas/staging/seed/`);
 }
 

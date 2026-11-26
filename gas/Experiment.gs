@@ -92,12 +92,13 @@ function _expFinalItemRows(storeMap) {
   return rows;
 }
 
+var _EXP_TZ = '';
 // ---------- 日期：一律當成「台北的那一天 00:00」，不受試算表時區設定影響 ----------
 function _taipeiDateOnly(v) {
   if (!v) return null;
   const d = new Date(v);
   if (isNaN(d.getTime())) return null;
-  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const tz = _EXP_TZ || (_EXP_TZ = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone());
   return new Date(Utilities.formatDate(d, tz, 'yyyy-MM-dd') + 'T00:00:00+08:00');
 }
 
@@ -120,7 +121,35 @@ function _isVisibleToDept(visibleTo, dept) {
   return visibleTo.indexOf(String(dept || '').trim()) !== -1;
 }
 
+var _USER_INFO_MEMO = {};
+// 網頁請求：先查「工號 → 姓名／部門／角色」的暫存對照表（5 分鐘，不含密碼），查不到（例如剛新增的人）再讀 Users。
+// 編輯器執行一律直接讀 Users。改了角色或部門要立刻生效，執行 expClearCache。
 function _getUserInfo(userId) {
+  const key = String(userId).trim();
+  if (!_EXP_USE_CACHE) return _getUserInfoUncached(userId);
+  if (_USER_INFO_MEMO[key] !== undefined) return _USER_INFO_MEMO[key]; // 同一請求內只查一次
+  const map = _expUserMap();
+  const hit = map[key];
+  return (_USER_INFO_MEMO[key] = hit ? { userId: key, name: hit[0], dept: hit[1], role: hit[2] } : _getUserInfoUncached(userId));
+}
+
+function _expUserMap() {
+  const ck = _expCacheKey('users');
+  const s = CacheService.getScriptCache().get(ck);
+  const cached = s ? safeParseJSON(s, null) : null;
+  if (cached) return cached;
+  const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.USERS));
+  const map = {};
+  for (let i = 1; i < rows.length; i++) {
+    const id = String(rows[i][cols.UserId] || '').trim();
+    if (!id) continue;
+    map[id] = [rows[i][cols.Name] || '', String(rows[i][cols.Department] || '').trim(), String(rows[i][cols.Role] || '').toLowerCase()];
+  }
+  try { CacheService.getScriptCache().put(ck, JSON.stringify(map), EXP_CACHE_TTL); } catch (e) { Logger.log('Users 對照表暫存失敗：' + e); }
+  return map;
+}
+
+function _getUserInfoUncached(userId) {
   const { cols, rows } = _readSheet(getSheet(SHEET_NAMES.USERS));
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][cols.UserId]).trim() !== String(userId).trim()) continue;
@@ -144,19 +173,80 @@ function _canSeeCourse(userId, courseId) {
 
 // ---------- 實驗表讀取 ----------
 
-// 讀實驗表：用原始中文標題對應欄位（不走 HEADER_ALIASES，避免「工號」被改名）
-function _expRead(name) {
-  const sheet = getSheet(name);
-  if (!sheet) throw new Error('找不到工作表：' + name + '（請先執行 setupExperimentSheets）');
-  const rows = _getDataRangeWithRetry(sheet);
-  const cols = {};
-  (rows[0] || []).forEach((h, i) => { if (h) cols[String(h).trim()] = i; });
-  return { sheet, cols, rows };
+// ---------- 讀表加速（2026/11/25 壓測後加入） ----------
+// 1. 網頁請求內，同一張表只讀一次（_EXP_MEMO，每次執行都是新的）。
+// 2. 網頁請求（doPost）時，開課後幾乎不變的表另外暫存 5 分鐘（CacheService），
+//    在試算表手動改了這些表，最多 5 分鐘後生效；要立刻生效就在編輯器執行 expClearCache。
+//    編輯器手動執行、排程（月報、檢核）一律讀最新資料，不用暫存。
+// 3. 作答紀錄、練習紀錄每次都讀最新；在鎖裡面檢查時用 _expRead(name, true) 強制重讀。
+var _EXP_MEMO = {};
+var _EXP_USE_CACHE = false; // doPost 一開始設成 true
+const EXP_STATIC_SHEETS = ['實驗_設定', '實驗_門市分派', '實驗_品項', '實驗_題目', '實驗_卷別分配', '實驗_參與者'];
+const EXP_CACHE_TTL = 300;
+// 暫存鍵加上「代號」：expClearCache 只要換代號，舊暫存就全部作廢（包含每個人的「已交卷」記號）
+var _EXP_GEN = '';
+function _expCacheKey(name) {
+  if (!_EXP_GEN) _EXP_GEN = PropertiesService.getScriptProperties().getProperty('EXP_CACHE_GEN') || '0';
+  return 'exp_' + _EXP_GEN + '_' + name;
+}
+// 交卷／回報排隊逾時：訊息要含「逾時」，前端（gasClient）認得出來會自動重送
+const EXP_BUSY_MSG = '目前同時送出的人比較多，排隊逾時，請再按一次送出';
+
+function _expCacheGet(name) {
+  const s = CacheService.getScriptCache().get(_expCacheKey(name));
+  if (!s) return null;
+  const rows = safeParseJSON(s, null);
+  if (!rows) return null;
+  return rows.map(r => r.map(v => (v && typeof v === 'object' && v.__d !== undefined) ? new Date(v.__d) : v));
 }
 
+function _expCachePut(name, rows) {
+  try {
+    const enc = rows.map(r => r.map(v => v instanceof Date ? { __d: v.getTime() } : v));
+    CacheService.getScriptCache().put(_expCacheKey(name), JSON.stringify(enc), EXP_CACHE_TTL);
+  } catch (e) {
+    Logger.log(name + ' 暫存失敗（可能超過 100KB），改為每次直接讀：' + e); // 功能不受影響，只是比較慢
+  }
+}
+
+// 讓實驗表的修改立刻生效（在編輯器手動改了設定、分派、品項、題目、卷別、名單後執行）
+function expClearCache() {
+  PropertiesService.getScriptProperties().setProperty('EXP_CACHE_GEN', String(Date.now()));
+  _EXP_GEN = '';
+  _invalidateCourseCache();
+  _EXP_MEMO = {};
+  Logger.log('✅ 已清除實驗表與課程的暫存，下一次讀取就是最新資料');
+}
+
+// 讀實驗表：用原始中文標題對應欄位（不走 HEADER_ALIASES，避免「工號」被改名）
+// fresh=true：不用同一請求內讀過的結果，也不用暫存（鎖裡面的檢查要用）
+function _expRead(name, fresh) {
+  if (!fresh && _EXP_USE_CACHE && _EXP_MEMO[name]) return _EXP_MEMO[name];
+  const sheet = getSheet(name);
+  if (!sheet) throw new Error('找不到工作表：' + name + '（請先執行 setupExperimentSheets）');
+  const isStatic = EXP_STATIC_SHEETS.indexOf(name) !== -1;
+  let rows = (!fresh && _EXP_USE_CACHE && isStatic) ? _expCacheGet(name) : null;
+  if (!rows) {
+    rows = _getDataRangeWithRetry(sheet);
+    if (_EXP_USE_CACHE && isStatic) _expCachePut(name, rows);
+  }
+  const cols = {};
+  (rows[0] || []).forEach((h, i) => { if (h) cols[String(h).trim()] = i; });
+  const out = { sheet, cols, rows };
+  if (_EXP_USE_CACHE) _EXP_MEMO[name] = out; // 只在網頁請求內記住；編輯器執行（會刪表重建）一律重讀
+  return out;
+}
+
+// 追加資料列。呼叫端如果有拿鎖，一定要在放鎖「之前」呼叫這個：
+// 這裡寫完會 SpreadsheetApp.flush()，確保下一個拿到鎖的人用 getLastRow 看得到這幾列。
+// （2026/11/25 壓測：沒有 flush 時，6 人同時交卷只留下 2 人的作答，其餘被後寫的人覆蓋）
 function _expAppend(name, objs) {
   if (!objs.length) return;
-  const { sheet, cols } = _expRead(name);
+  const sheet = getSheet(name);
+  if (!sheet) throw new Error('找不到工作表：' + name + '（請先執行 setupExperimentSheets）');
+  const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]; // 只讀標題列，不讀整表
+  const cols = {};
+  head.forEach((h, i) => { if (h) cols[String(h).trim()] = i; });
   const width = Math.max.apply(null, Object.keys(cols).map(k => cols[k])) + 1;
   const values = objs.map(o => {
     const row = new Array(width).fill('');
@@ -164,6 +254,9 @@ function _expAppend(name, objs) {
     return row;
   });
   sheet.getRange(sheet.getLastRow() + 1, 1, values.length, width).setValues(values);
+  SpreadsheetApp.flush();
+  delete _EXP_MEMO[name];
+  if (EXP_STATIC_SHEETS.indexOf(name) !== -1) CacheService.getScriptCache().remove(_expCacheKey(name));
 }
 
 function _expConfig() {
@@ -232,10 +325,16 @@ function _expPracticeItems(store, categories, cfg, pitems) {
   return out;
 }
 
-function _expTestSubmitted(userId, phase) {
-  const { cols, rows } = _expRead(EXP_SHEETS.RESPONSES);
+// 交過卷不會變回沒交：網頁請求查到「已交」就記 6 小時，之後不用再讀整張作答紀錄（作答紀錄會越來越大）
+function _expTestSubmitted(userId, phase, fresh) {
+  const ck = _expCacheKey('done_' + phase + '_' + userId);
+  if (!fresh && _EXP_USE_CACHE && CacheService.getScriptCache().get(ck)) return true;
+  const { cols, rows } = _expRead(EXP_SHEETS.RESPONSES, fresh);
   for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][cols['工號']]).trim() === userId && String(rows[i][cols['階段']]).trim() === phase) return true;
+    if (String(rows[i][cols['工號']]).trim() === userId && String(rows[i][cols['階段']]).trim() === phase) {
+      if (_EXP_USE_CACHE) CacheService.getScriptCache().put(ck, '1', 21600);
+      return true;
+    }
   }
   return false;
 }
@@ -282,8 +381,8 @@ function _expHash01(s) {
 }
 
 // 讀某人的練習紀錄 → [{ day:'yyyy-MM-dd', type:'正式'|'自主', id }]
-function _expUserRecords(userId) {
-  const p = _expRead(EXP_SHEETS.PRACTICE);
+function _expUserRecords(userId, fresh) {
+  const p = _expRead(EXP_SHEETS.PRACTICE, fresh);
   const out = [];
   for (let i = 1; i < p.rows.length; i++) {
     const r = p.rows[i];
@@ -358,8 +457,8 @@ function _expComputeState(uid, records, items, cfg, now) {
   };
 }
 
-function _expPracticeState(user, items, cfg, now) {
-  return _expComputeState(user.userId, _expUserRecords(user.userId), items, cfg, now);
+function _expPracticeState(user, items, cfg, now, fresh) {
+  return _expComputeState(user.userId, _expUserRecords(user.userId, fresh), items, cfg, now);
 }
 
 // 使用者的實驗課程（依可見性）
@@ -519,20 +618,19 @@ function submitTest({ userId, courseId, answers, sessionToken }) {
   if (t.error) return { status: 'error', message: t.error };
   const uid = ctx.user.userId;
 
+  // 不需要鎖的檢查先做完（卷別、題目、有沒有漏答），鎖裡只做「有沒有交過」與寫入，縮短排隊
+  const form = _expFormFor(uid, t.phase);
+  if (!form) return { status: 'error', message: '你還沒有被分配卷別，請洽 HR' };
+  const items = _expItems(form);
+  if (items.length === 0) return { status: 'error', message: '題目尚未上架，請洽 HR' };
+  const ans = answers || {};
+  const missing = items.filter(it => ['A', 'B', 'C', 'D'].indexOf(String(ans[it.id] || '').toUpperCase()) === -1);
+  if (missing.length) return { status: 'error', message: `還有 ${missing.length} 題沒有作答` };
+
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  if (!lock.tryLock(30000)) return { status: 'error', message: EXP_BUSY_MSG };
   try {
-    if (_expTestSubmitted(uid, t.phase)) return { status: 'error', message: '你已經交過這份測驗了' };
-
-    const form = _expFormFor(uid, t.phase);
-    if (!form) return { status: 'error', message: '你還沒有被分配卷別，請洽 HR' };
-    const items = _expItems(form);
-    if (items.length === 0) return { status: 'error', message: '題目尚未上架，請洽 HR' };
-
-    const ans = answers || {};
-    const missing = items.filter(it => ['A', 'B', 'C', 'D'].indexOf(String(ans[it.id] || '').toUpperCase()) === -1);
-    if (missing.length) return { status: 'error', message: `還有 ${missing.length} 題沒有作答` };
-
+    if (_expTestSubmitted(uid, t.phase, true)) return { status: 'error', message: '你已經交過這份測驗了' };
     const now = new Date();
     _expAppend(EXP_SHEETS.RESPONSES, items.map(it => {
       const a = String(ans[it.id]).toUpperCase();
@@ -541,13 +639,14 @@ function submitTest({ userId, courseId, answers, sessionToken }) {
         '題號': it.id, '子類': it.category, '作答': a, '正解': it.answer, '是否答對': a === it.answer
       };
     }));
+    // 前測完課紀錄跟作答在同一把鎖裡寫，避免「答案存了、完課沒記到」（之前在鎖外，排隊逾時就會漏）
+    if (t.phase === 'pre') _completeCourseRecordLocked(uid, t.course.id, []);
   } finally {
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 
-  if (t.phase === 'pre') {
-    _completeCourseRecord(uid, t.course.id, []);
-  } else {
+  if (t.phase !== 'pre') {
     ctx.posttestDone = true;
     _expMaybeComplete(ctx, sessionToken);
   }
@@ -561,16 +660,22 @@ function _expSelfCategories() { return [EXP_CAT.M, EXP_CAT.K, EXP_CAT.W, EXP_CAT
 // 員工自陳完成一次練習。
 //   kind=formal：正式，只能練今天派到的品項（itemId）
 //   kind=self：自主，不限品項。填 category＋productName（自由輸入，可對到定案品項）；計入紀錄但不計正式次數
-function submitPractice({ userId, itemId, kind, category, productName, note, sessionToken }) {
+function submitPractice({ userId, itemId, kind, category, productName, note, requestId, sessionToken }) {
   const err = _requireSession(sessionToken, userId);
   if (err) return { status: 'error', message: err };
 
+  // 讀頁面狀態很花時間，放在鎖外面先算好；鎖裡只重讀這個人的練習紀錄再檢查一次
+  const ctx = _expContext(userId);
+  if (ctx.error) return { status: 'error', message: ctx.error };
+  // 前端每次按下回報會帶一個 requestId；連線逾時自動重送時，同一個 requestId 只記一次
+  const reqKey = requestId ? 'exp_req_' + String(userId).trim() + '_' + String(requestId).slice(0, 64) : '';
+  const cache = CacheService.getScriptCache();
+
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  let ctx;
+  if (!lock.tryLock(30000)) return { status: 'error', message: EXP_BUSY_MSG };
   try {
-    ctx = _expContext(userId);
-    if (ctx.error) return { status: 'error', message: ctx.error };
+    if (reqKey && cache.get(reqKey)) return getExperimentStatus({ userId, sessionToken }); // 已記過，直接回最新狀態
+    ctx.state = _expPracticeState(ctx.user, ctx.items, ctx.cfg, ctx.now, true);
     let rec;
     if (kind === 'self') {
       if (!ctx.selfOpen) return { status: 'error', message: 'AI 門市對練目前沒有開放給你' };
@@ -599,7 +704,9 @@ function submitPractice({ userId, itemId, kind, category, productName, note, ses
       '回報時間': ctx.now, '工號': ctx.user.userId, '姓名': ctx.user.name, '門市': ctx.store || ctx.user.dept,
       '週次': ctx.phase === 'running' ? _expWeekNo(ctx.cfg.start, ctx.now) : '', '備註': String(note || '').slice(0, 200)
     }, rec)]);
+    if (reqKey) cache.put(reqKey, '1', 3600);
   } finally {
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 
@@ -654,6 +761,7 @@ function setupExperimentSheets() {
   }
 
   _invalidateCourseCache();
+  expClearCache();
   Logger.log(created.length ? '✅ 已建立：' + created.join('、') : '✅ 實驗分頁都已存在，沒有變動');
 }
 
@@ -708,6 +816,7 @@ function applyParticipantAdjustments() {
     adj.sheet.getRange(i + 1, adj.cols['處理人'] + 1).setValue(me);
     done++;
   }
+  expClearCache();
   Logger.log(`✅ 已處理 ${done} 筆調整`);
 }
 

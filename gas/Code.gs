@@ -53,6 +53,7 @@ function doGet(e) {
 
 function doPost(e) {
   try {
+    _EXP_USE_CACHE = true; // 實驗表讀取加速（Experiment.gs）；編輯器手動執行與排程不用暫存
     const payload = JSON.parse(e.postData.contents);
     const action  = payload.action;
 
@@ -131,8 +132,12 @@ function _sendMail(opts) {
 // Helper
 // ============================================================
 
+var _SHEET_MEMO = {};
 function getSheet(name) {
-  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  // 同一個請求內重複取同一張表時不再查一次（每次執行都是新的，不會跨請求）
+  if (!_EXP_USE_CACHE) return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name); // 編輯器執行會刪表重建，不記
+  if (!_SHEET_MEMO[name]) _SHEET_MEMO[name] = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  return _SHEET_MEMO[name];
 }
 
 // 取得 NotificationLog 表，第一次呼叫時自動建立（含表頭），之後直接沿用既有表
@@ -452,6 +457,7 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
         sheet.getRange(i + 1, cols.Email + 1).setValue(String(notifyEmail).trim());
       }
     } finally {
+      SpreadsheetApp.flush();
       lock.releaseLock();
     }
     return { status: 'success' };
@@ -488,6 +494,7 @@ function updateNotifyEmail({ userId, email, sessionToken }) {
     }
     return { status: 'error', message: '找不到此員工' };
   } finally {
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 }
@@ -847,8 +854,18 @@ function completeCourse({ userId, courseId, sessionToken }) {
 // 內部完課寫入（呼叫前要自己確認完課條件）。門市對練（Experiment.gs）也走這裡。
 function _completeCourseRecord(userId, courseId, badges) {
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  lock.waitLock(30000);
   try {
+    return _completeCourseRecordLocked(userId, courseId, badges);
+  } finally {
+    SpreadsheetApp.flush();
+    lock.releaseLock();
+  }
+}
+
+// 同上，但呼叫者已經拿著 script lock（GAS 的鎖不可重入，例如交前測時跟作答在同一把鎖裡寫）
+function _completeCourseRecordLocked(userId, courseId, badges) {
+  {
     const sheet = getSheet(SHEET_NAMES.PROGRESS);
     const { cols, rows } = _readSheet(sheet);
 
@@ -878,8 +895,6 @@ function _completeCourseRecord(userId, courseId, badges) {
     });
 
     return { status: 'success', success: true, data: merged };
-  } finally {
-    lock.releaseLock();
   }
 }
 
@@ -964,6 +979,7 @@ function updateProgress({ userId, addMinutes, sessionToken }) {
     const merged = _mergeUserProgress(userId, { addMinutes: delta });
     return { status: 'success', data: merged };
   } finally {
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 }
@@ -1039,6 +1055,7 @@ function submitOJT({ userId, courseId, submitType, fileName, mimeType, base64Dat
     _invalidateTableCache(OJT_TASKS_CACHE_KEY);
     return { status: 'success' };
   } finally {
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 }
@@ -1205,6 +1222,7 @@ function reviewOJTTask({ rowNumber, taskId, newStatus, rejectReason, requestUser
     _invalidateTableCache(OJT_TASKS_CACHE_KEY); // Status/RejectReason/ApprovedAt 一定有改動
     return { success: true, status: 'success' };
   } finally {
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 }
@@ -2227,6 +2245,7 @@ function setDeptMandatory({ deptId, courseId, isAdd, requestUserId, sessionToken
       return { status: 'success', message: '不存在' };
     }
   } finally {
+    SpreadsheetApp.flush();
     lock.releaseLock();
   }
 }

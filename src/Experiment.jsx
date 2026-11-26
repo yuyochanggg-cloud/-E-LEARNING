@@ -31,6 +31,7 @@ export function TestView({ course, userId, onSubmitted }) {
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [slow, setSlow] = useState(false); // 交卷超過 5 秒：顯示排隊提示
 
   const load = useCallback(async () => {
     setState({ loading: true });
@@ -63,19 +64,24 @@ export function TestView({ course, userId, onSubmitted }) {
     if (answered < items.length) { setSubmitError(`還有 ${items.length - answered} 題沒有作答`); return; }
     if (!window.confirm('交卷後就不能修改，確定要交卷嗎？')) return;
     setSubmitting(true);
+    setSlow(false);
+    const slowTimer = setTimeout(() => setSlow(true), 5000);
     try {
       const res = await gasClient.securePost('submitTest', { userId, courseId: course.id, answers });
-      if (res?.status === 'success') {
+      // 「已經交過」：通常是連線逾時自動重送、但第一次其實已經存進去了，一樣當作交卷完成
+      if (res?.status === 'success' || /已經交過/.test(res?.message || '')) {
         setState({ loading: false, submitted: true });
         onSubmitted && onSubmitted();
       } else {
         setSubmitError(res?.message || '交卷失敗，請再試一次');
       }
     } catch {
-      // 連線中斷時可能其實已交卷成功：重新載入，已交過就會直接顯示完成畫面
+      // 連線中斷時可能其實已交卷成功：重新載入，已交過就會直接顯示完成畫面（作答內容會保留在畫面上）
       setSubmitError('連線異常，正在確認交卷狀態...');
       load();
     } finally {
+      clearTimeout(slowTimer);
+      setSlow(false);
       setSubmitting(false);
     }
   };
@@ -117,6 +123,7 @@ export function TestView({ course, userId, onSubmitted }) {
       <div className="sticky bottom-20 md:bottom-4 bg-white/95 backdrop-blur rounded-2xl border border-slate-200 shadow-lg p-4 flex flex-col sm:flex-row items-center gap-3">
         <span className="text-sm font-bold text-slate-600">已作答 {answered} / {items.length} 題</span>
         {submitError && <span className="text-sm font-bold text-red-600">{submitError}</span>}
+        {slow && !submitError && <span className="text-sm font-bold text-amber-600">目前同時交卷的人比較多，正在排隊，請不要關閉頁面⋯</span>}
         <button
           onClick={handleSubmit}
           disabled={submitting}
@@ -252,8 +259,12 @@ export function DrillView({ userId, onChanged }) {
   const send = async (payload, label, onOk) => {
     setFlash('');
     setSending(true);
+    const slowTimer = setTimeout(() => setFlash('目前同時回報的人比較多，正在排隊，請稍候⋯'), 5000);
+    // 每按一次產生一個編號：連線逾時自動重送時，後端看到同一個編號只會記一次
+    const requestId = (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
     try {
-      const res = await gasClient.securePost('submitPractice', { userId, note: '', ...payload });
+      const res = await gasClient.securePost('submitPractice', { userId, note: '', requestId, ...payload });
+      clearTimeout(slowTimer);
       if (res?.status === 'success') {
         setStatus(res.data);
         setFlash(`已記錄：${label}`);
@@ -265,6 +276,7 @@ export function DrillView({ userId, onChanged }) {
     } catch {
       setFlash('連線異常，請稍後再試');
     } finally {
+      clearTimeout(slowTimer);
       setSending(false);
     }
   };
