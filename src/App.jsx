@@ -1392,6 +1392,75 @@ function AchievementView({ progress, courses }) {
 // ==========================================
 // 👑 主管管理中心（三 Tab 版）
 // ==========================================
+// 管理員重設同仁密碼：輸入工號 → 確認姓名 → 系統產生 6 碼臨時密碼（只顯示這一次）
+function PasswordResetPanel({ userId }) {
+  const [uid, setUid] = useState('');
+  const [found, setFound] = useState(null);   // { userId, name, department }
+  const [result, setResult] = useState(null); // { userId, name, tempPassword }
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  async function lookup(e) {
+    e.preventDefault();
+    setFound(null); setResult(null);
+    if (!uid.trim()) return;
+    setBusy(true);
+    try {
+      const res = await gasClient.securePost('resetUserPassword', { targetUserId: uid.trim(), dryRun: true, requestUserId: userId });
+      if (res.status === 'success') setFound(res.data);
+      else showToast(res.message || '查詢失敗', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function doReset() {
+    if (!window.confirm(`確定重設「${found.name}（${found.userId}）」的密碼？原本的密碼會立刻失效。`)) return;
+    setBusy(true);
+    try {
+      const res = await gasClient.securePost('resetUserPassword', { targetUserId: found.userId, requestUserId: userId });
+      if (res.status === 'success') { setResult(res.data); setFound(null); setCopied(false); }
+      else showToast(res.message || '重設失敗', 'error');
+    } catch {
+      showToast('連線異常：請重新查詢這位同仁，必要時再重設一次', 'error');
+    } finally { setBusy(false); }
+  }
+
+  async function copy() {
+    try { await navigator.clipboard.writeText(result.tempPassword); setCopied(true); } catch { /* 手動抄 */ }
+  }
+
+  return (
+    <div className="max-w-xl space-y-4">
+      <div className="bg-white border border-slate-200 rounded-2xl p-5">
+        <h3 className="font-bold text-slate-700 mb-1">重設同仁密碼</h3>
+        <p className="text-sm text-slate-500 mb-4">密碼已改成加密存放，HR 查不到原本的密碼。同仁忘記密碼時，在這裡重設，系統會產生一組 6 碼臨時密碼，請轉告本人；登入後系統會要求改密碼。</p>
+        <form onSubmit={lookup} className="flex gap-2">
+          <input value={uid} onChange={e => { setUid(e.target.value); setFound(null); }} placeholder="輸入工號"
+            className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+          <button type="submit" disabled={busy || !uid.trim()} className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold disabled:opacity-50">查詢</button>
+        </form>
+        {found && (
+          <div className="mt-4 p-4 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-amber-900"><b>{found.name}</b>（{found.userId}）{found.department && `｜${found.department}`}</p>
+            <button onClick={doReset} disabled={busy} className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-50">
+              {busy ? '處理中…' : '重設密碼'}
+            </button>
+          </div>
+        )}
+      </div>
+      {result && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5" role="status">
+          <p className="text-sm text-emerald-800 mb-2">已重設 <b>{result.name}</b>（{result.userId}）的密碼。臨時密碼：</p>
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-3xl font-extrabold tracking-widest text-emerald-900 select-all">{result.tempPassword}</span>
+            <button onClick={copy} className="px-3 py-1.5 rounded-lg bg-white border border-emerald-200 text-emerald-700 text-sm font-bold">{copied ? '已複製' : '複製'}</button>
+          </div>
+          <p className="text-xs text-emerald-700 mt-3">這組密碼只會顯示這一次，請直接轉告本人，不要另外留存。離開這頁就看不到了。</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ManagerDashboard({ onBack, userProfile, courses }) {
   const isSupervisor = userProfile?.role === 'supervisor'; // 督導：唯讀，只看 AI 對練進度
   const [activeTab, setActiveTab] = useState(isSupervisor ? 'practice' : 'ojt');
@@ -1523,6 +1592,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
     { key: 'report',   label: '部門學習狀況' },
     { key: 'settings', label: '必修課設定' },
     ...(showPractice ? [{ key: 'practice', label: 'AI 對練進度' }] : []),
+    ...(isAdmin ? [{ key: 'password', label: '密碼重設' }] : []),
   ];
 
   return (
@@ -1538,7 +1608,7 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
       </div>
 
       {/* admin 部門選擇 */}
-      {isAdmin && activeTab !== 'practice' && (
+      {isAdmin && activeTab !== 'practice' && activeTab !== 'password' && (
         <div className="mb-4 flex items-center gap-3">
           <span className="text-sm text-slate-500 font-medium">查看部門：</span>
           <select value={selectedDept} onChange={e => setSelectedDept(e.target.value)}
@@ -1565,8 +1635,9 @@ function ManagerDashboard({ onBack, userProfile, courses }) {
 
       {/* Loading */}
       {activeTab === 'practice' && <PracticeProgressView state={practice} onReload={reloadPractice} />}
+      {activeTab === 'password' && isAdmin && <PasswordResetPanel userId={userId} />}
 
-      {isLoading && activeTab !== 'practice' && (
+      {isLoading && activeTab !== 'practice' && activeTab !== 'password' && (
         <div className="flex justify-center py-16">
           <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
         </div>

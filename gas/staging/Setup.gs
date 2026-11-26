@@ -559,7 +559,7 @@ function replaceTestItemsFromSeed() {
 // 本機 staging 前端把憑證放進 localStorage 就能以該身分進站，不需要輸入密碼。
 function stagingIssueTokens() {
   _assertStagingSpreadsheet();
-  ['T0002', 'T0003', 'T0006', 'V-SC-E', 'V-SC-M', 'V-SUP'].forEach(id => {
+  ['T0001', 'T0002', 'T0003', 'T0006', 'V-SC-E', 'V-SC-M', 'V-SUP'].forEach(id => {
     const u = _getUserInfo(id);
     Logger.log(`${id} ${u ? u.role : '?'} TOKEN=${_generateSessionToken(id)}`);
   });
@@ -784,4 +784,63 @@ function stagingCheckPasswordHash() {
   }
   Logger.log(results.join('\n'));
   Logger.log(results.some(x => x.indexOf('FAIL') === 0) ? '❌ 有失敗項目' : `✅ 全部 ${results.length} 項通過`);
+}
+
+// 管理員重設密碼驗證（只限 staging，2026/11/26）：暫時帳號 T9RS，測完刪除帳號與紀錄列。
+function stagingCheckPasswordReset() {
+  _assertStagingSpreadsheet();
+  const results = [];
+  const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? '：' + extra : ''}`);
+  const sheet = getSheet(SHEET_NAMES.USERS);
+  const uid = 'T9RS';
+  const cols = _readSheet(sheet).cols;
+  const rowOf = () => { const r = _readSheet(sheet).rows; for (let i = 1; i < r.length; i++) if (String(r[i][cols.UserId]).trim() === uid) return i + 1; return -1; };
+  if (rowOf() > 0) sheet.deleteRow(rowOf());
+  sheet.appendRow(_buildRow(cols, { UserId: uid, Name: '重設測試', Role: 'employee', CreatedAt: new Date(), Password: _makePasswordHash('old-pass'), IsFirstLogin: false, Department: '測試管理部' }));
+  SpreadsheetApp.flush();
+  const login = pw => verifyLogin({ userId: uid, password: pw });
+  const adminTk = _generateSessionToken('T0001'), mgrTk = _generateSessionToken('T0002');
+  try {
+    check('店長不能重設', resetUserPassword({ targetUserId: uid, requestUserId: 'T0002', sessionToken: mgrTk }).status === 'error');
+    check('督導不能重設', resetUserPassword({ targetUserId: uid, requestUserId: 'T0006', sessionToken: _generateSessionToken('T0006') }).status === 'error');
+    check('冒用管理員工號 → 擋', resetUserPassword({ targetUserId: uid, requestUserId: 'T0001', sessionToken: mgrTk }).status === 'error');
+    check('查不到的工號', resetUserPassword({ targetUserId: 'NOPE', dryRun: true, requestUserId: 'T0001', sessionToken: adminTk }).status === 'error');
+    const before = String(sheet.getRange(rowOf(), cols.Password + 1).getValue());
+    const q = resetUserPassword({ targetUserId: uid, dryRun: true, requestUserId: 'T0001', sessionToken: adminTk });
+    check('查詢只回姓名部門、不改密碼', q.status === 'success' && q.data.name === '重設測試' && !q.data.tempPassword && String(sheet.getRange(rowOf(), cols.Password + 1).getValue()) === before);
+
+    for (let k = 0; k < 5; k++) login('wrong');
+    check('連錯 5 次被鎖', login('old-pass').status === 'error');
+    const r = resetUserPassword({ targetUserId: uid, requestUserId: 'T0001', sessionToken: adminTk });
+    const temp = r.data && r.data.tempPassword;
+    check('重設成功、臨時密碼是 6 碼數字', r.status === 'success' && /^\d{6}$/.test(temp || ''), temp ? '（6 碼）' : r.message);
+    const cell = String(sheet.getRange(rowOf(), cols.Password + 1).getValue());
+    check('試算表存的是雜湊、看不到臨時密碼', cell.indexOf('h2$') === 0 && cell.indexOf(temp) === -1);
+    const l = login(temp);
+    check('重設後解除鎖定、臨時密碼可登入、要求改密碼', l.status === 'success' && l.data.isFirstLogin === true);
+    check('舊密碼失效', login('old-pass').status === 'error');
+    _clearLoginFailures(uid);
+    const r2 = resetUserPassword({ targetUserId: uid, requestUserId: 'T0001', sessionToken: adminTk });
+    check('每次重設的臨時密碼都不同', r2.status === 'success' && r2.data.tempPassword !== temp);
+    const log = getSheet(PASSWORD_RESET_LOG);
+    const lr = log ? log.getDataRange().getValues().filter(x => String(x[1]) === uid) : [];
+    check('留下重設紀錄（不含密碼）', lr.length >= 2 && lr.every(x => x.join('|').indexOf(temp) === -1 && x.join('|').indexOf(r2.data.tempPassword) === -1));
+  } finally {
+    _clearLoginFailures(uid);
+    if (rowOf() > 0) sheet.deleteRow(rowOf());
+    const log = getSheet(PASSWORD_RESET_LOG);
+    if (log) { const v = log.getDataRange().getValues(); for (let i = v.length - 1; i >= 1; i--) if (String(v[i][1]) === uid) log.deleteRow(i + 1); }
+  }
+  Logger.log(results.join('\n'));
+  Logger.log(results.some(x => x.indexOf('FAIL') === 0) ? '❌ 有失敗項目' : `✅ 全部 ${results.length} 項通過`);
+}
+
+// 畫面實測「密碼重設」用：暫時帳號 T9UI（測完執行 stagingDropTempUser 刪除）
+function stagingMakeTempUser() { _assertStagingSpreadsheet(); stagingDropTempUser(); const s = getSheet(SHEET_NAMES.USERS); s.appendRow(_buildRow(_readSheet(s).cols, { UserId: 'T9UI', Name: '畫面測試同仁', Role: 'employee', CreatedAt: new Date(), Password: _makePasswordHash(Utilities.getUuid()), IsFirstLogin: false, Department: '測試管理部' })); Logger.log('✅ 已建立 T9UI'); }
+function stagingDropTempUser() {
+  _assertStagingSpreadsheet();
+  const s = getSheet(SHEET_NAMES.USERS); const r = _readSheet(s).rows;
+  for (let i = r.length - 1; i >= 1; i--) if (String(r[i][0]).trim() === 'T9UI') s.deleteRow(i + 1);
+  const log = getSheet(PASSWORD_RESET_LOG);
+  if (log) { const v = log.getDataRange().getValues(); for (let i = v.length - 1; i >= 1; i--) if (String(v[i][1]) === 'T9UI') log.deleteRow(i + 1); }
 }

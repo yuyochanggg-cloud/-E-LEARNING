@@ -82,6 +82,7 @@ function doPost(e) {
       submitTest:          submitTest,
       submitPractice:      submitPractice,
       getPracticeProgress: getPracticeProgress, // 店長／督導看 AI 對練進度
+      resetUserPassword:   resetUserPassword,   // 管理員重設密碼（系統產生臨時密碼）
     };
 
     if (!handlers[action]) {
@@ -400,6 +401,62 @@ function setupPasswordHashTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => { if (t.getHandlerFunction() === 'hashPlainPasswords') ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('hashPlainPasswords').timeBased().everyMinutes(10).create();
   Logger.log('✅ 已建立每 10 分鐘把明碼轉成雜湊的排程');
+}
+
+// ------------------------------------------------------------
+// 管理員重設密碼（系統管理中心「密碼重設」）：系統產生 6 碼隨機臨時密碼，只回傳這一次，
+// 存成雜湊、IsFirstLogin 設 TRUE（登入後要求改密碼）、解除連錯鎖定，並在「密碼重設紀錄」留紀錄（不記密碼）。
+// dryRun=true：只查姓名／部門給畫面確認，不改任何東西。
+// ------------------------------------------------------------
+const PASSWORD_RESET_LOG = '密碼重設紀錄';
+
+function _randomDigits(n) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Utilities.getUuid(), Utilities.Charset.UTF_8);
+  let s = '';
+  for (let i = 0; i < n; i++) s += String((bytes[i] & 255) % 10); // 每次執行都用新的隨機 UUID，結果無法預測
+  return s;
+}
+
+function resetUserPassword({ targetUserId, dryRun, requestUserId, sessionToken }) {
+  const err = _requireSession(sessionToken, requestUserId);
+  if (err) return { status: 'error', message: err };
+  if (_getRole(requestUserId) !== 'admin') return { status: 'error', message: '權限不足' };
+  const target = String(targetUserId || '').trim();
+  if (!target) return { status: 'error', message: '請輸入工號' };
+
+  const sheet = getSheet(SHEET_NAMES.USERS);
+  const { cols, rows } = _readSheet(sheet);
+  let rowNo = -1, info = null;
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][cols.UserId]).trim() !== target) continue;
+    rowNo = i + 1;
+    info = { userId: target, name: String(rows[i][cols.Name] || ''), department: String(rows[i][cols.Department] || '').trim() };
+    break;
+  }
+  if (!info) return { status: 'error', message: '找不到這個工號' };
+  if (dryRun) return { status: 'success', data: info };
+
+  const temp = _randomDigits(6);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return { status: 'error', message: '系統忙碌中，請稍後再試一次' };
+  try {
+    sheet.getRange(rowNo, cols.Password + 1).setValue(_makePasswordHash(temp));
+    sheet.getRange(rowNo, cols.IsFirstLogin + 1).setValue(true);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let log = ss.getSheetByName(PASSWORD_RESET_LOG);
+    if (!log) {
+      log = ss.insertSheet(PASSWORD_RESET_LOG);
+      log.appendRow(['重設時間', '工號', '姓名', '處理人']);
+      log.getRange(1, 1, 1, 4).setFontWeight('bold');
+    }
+    const me = _getUserInfo(requestUserId) || {};
+    log.appendRow([new Date(), _cellSafe(target), _cellSafe(info.name), _cellSafe(`${me.name || ''}（${requestUserId}）`)]);
+  } finally {
+    SpreadsheetApp.flush();
+    lock.releaseLock();
+  }
+  _clearLoginFailures(target);
+  return { status: 'success', data: Object.assign(info, { tempPassword: temp }) };
 }
 
 // ------------------------------------------------------------
