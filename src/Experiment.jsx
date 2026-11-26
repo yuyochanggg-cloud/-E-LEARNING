@@ -90,7 +90,7 @@ export function TestView({ course, userId, onSubmitted }) {
     <div className="space-y-6">
       <Notice tone="info">
         共 {items.length} 題單選題，<b>只能作答一次</b>，交卷後不會顯示分數與答案。<br />
-        請依自己目前的了解獨立作答，不要查資料或討論；不會的題目選最接近的答案即可。這份測驗不列入考核。
+        <b>作答時不能查資料，也不要跟同事討論，請憑直覺直接作答。</b>不會的題目選最接近的答案即可。這份測驗不列入考核。
       </Notice>
 
       {items.map((it, idx) => (
@@ -205,9 +205,11 @@ function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '
       </div>
       <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line flex-1">{item.guide || '（練習指引準備中）'}</p>
       <div className="flex flex-wrap gap-2">
-        <button onClick={() => { copyText(item.name); onOpenBot(item); }} className="flex items-center gap-1 px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold text-sm hover:bg-indigo-50">
-          <MessageCircle className="w-4 h-4" /> 複製品名並開啟 AI 對練
-        </button>
+        {!doneToday && (
+          <button onClick={() => { copyText(item.name); onOpenBot(item); }} className="flex items-center gap-1 px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold text-sm hover:bg-indigo-50">
+            <MessageCircle className="w-4 h-4" /> 複製品名並開啟 AI 對練
+          </button>
+        )}
         <button onClick={() => onReport(item)} disabled={sending || doneToday}
           className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-sm">
           {doneToday ? '✓ 今天已完成' : (sending ? '送出中...' : reportLabel)}
@@ -329,7 +331,7 @@ export function DrillView({ userId, onChanged }) {
           {!status.pretestDone && (
             <div className="bg-white rounded-2xl border-2 border-blue-400 p-6 space-y-3">
               <h4 className="text-lg font-black text-slate-900">第一步：商品知識測驗</h4>
-              <p className="text-sm text-slate-600">完成這份測驗後才會開放練習。只能作答一次，約 25 分鐘，不會顯示分數。</p>
+              <p className="text-sm text-slate-600">完成這份測驗後才會開放練習。只能作答一次，約 25 分鐘，不會顯示分數。<b className="text-slate-800">不能查資料，也不要討論，請憑直覺直接作答。</b></p>
               <button onClick={() => setTestCourseId(status.preCourseId)} disabled={!status.preCourseId}
                 className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold">開始作答</button>
             </div>
@@ -343,7 +345,7 @@ export function DrillView({ userId, onChanged }) {
                 {status.allDone
                   ? '你已完成全部正式練習，請完成這份測驗，交卷後即完成本期任務。'
                   : '測驗已開放，請盡快完成。還沒練完的品項，之後練完一樣會計入。'}
-                只能作答一次，不會顯示分數。
+                只能作答一次，不會顯示分數。<b className="text-slate-800">不能查資料，也不要討論，請憑直覺直接作答。</b>
               </p>
               <button onClick={() => setTestCourseId(status.postCourseId)}
                 className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold">開始作答</button>
