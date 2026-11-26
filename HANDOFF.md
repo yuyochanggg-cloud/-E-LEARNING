@@ -148,7 +148,7 @@
 - 未查：正式試算表、OJT 資料夾、GAS 部署、Vercel 的實際共用設定（要後台）。
 
 **2026/11/26 Security Gate**（報告 `~/claude/outputs/reports/良興雲端學院_SecurityGate_2026-11-26.md`；結果 FAIL，阻擋原因是既有的 F-01 密碼明碼、F-02 公式注入；督導＋月報新功能本身沒有阻擋問題）
-- **F-02 試算表公式注入**：使用者輸入以「=」開頭的字串會被存成公式（staging 實測：自主練習商品名 `=1+1` 存成 2）。修正：Code.gs 新增 `_cellSafe`（以 `= + - @`、tab、換行開頭的字串前面加 `'`），套用到 `_buildRow`、`_expAppend`、密碼、通知信箱 ×2、退回理由。staging 推送並部署 @19；`stagingCheckFormulaInjection` 6/6、`stagingSmokeSecurity` 11/11 通過。**修正還沒 commit、還沒上正式**：它跟其他 session 未 commit 的 WIP（效能暫存、requestId、gasClient 逾時重送）在同一批檔案裡，要和 WIP 一起 commit 後推正式。之後新增任何「把使用者輸入寫進試算表」的程式，都要經過 `_cellSafe`。
+- **F-02 試算表公式注入**：使用者輸入以「=」開頭的字串會被存成公式（staging 實測：自主練習商品名 `=1+1` 存成 2）。修正：Code.gs 新增 `_cellSafe`（以 `= + - @`、tab、換行開頭的字串前面加 `'`），套用到 `_buildRow`、`_expAppend`、密碼、通知信箱 ×2、退回理由。staging 推送並部署 @19；`stagingCheckFormulaInjection` 6/6、`stagingSmokeSecurity` 11/11 通過。commit fe418f1（基礎＝637a981）。**11/26 已上正式 @61**：推送前確認線上是 @60＝637a981（程式碼.js、Experiment.js 與 637a981 逐字相同），gas_safe_push 只推這兩檔（FinalData.js 維持正式原檔不動）→ 建版本 61 → 正式部署 @60→@61；未登入呼叫 `getPracticeProgress`／`bootstrap` 都回「登入已逾期」，doGet 正常。退版：`clasp update-deployment AKfycbxTcxKo... -V 60`。前端沒有改。之後新增任何「把使用者輸入寫進試算表」的程式，都要經過 `_cellSafe`。
 - 其他待決：F-01 密碼改存 hash，或由使用者正式接受風險；F-03 月報只寄公司網域信箱；以及報告列出的 Low 項目。
 - staging「實驗_練習紀錄」留有一列修正前的測試資料（V-SC-E 自主，商品名與備註是公式 2／5），重建示範資料時會一起清掉。
 
