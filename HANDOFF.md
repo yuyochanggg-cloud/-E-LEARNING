@@ -149,7 +149,8 @@
 
 **2026/11/26 Security Gate**（報告 `~/claude/outputs/reports/良興雲端學院_SecurityGate_2026-11-26.md`；結果 FAIL，阻擋原因是既有的 F-01 密碼明碼、F-02 公式注入；督導＋月報新功能本身沒有阻擋問題）
 - **F-02 試算表公式注入**：使用者輸入以「=」開頭的字串會被存成公式（staging 實測：自主練習商品名 `=1+1` 存成 2）。修正：Code.gs 新增 `_cellSafe`（以 `= + - @`、tab、換行開頭的字串前面加 `'`），套用到 `_buildRow`、`_expAppend`、密碼、通知信箱 ×2、退回理由。staging 推送並部署 @19；`stagingCheckFormulaInjection` 6/6、`stagingSmokeSecurity` 11/11 通過。commit fe418f1（基礎＝637a981）。**11/26 已上正式 @61**：推送前確認線上是 @60＝637a981（程式碼.js、Experiment.js 與 637a981 逐字相同），gas_safe_push 只推這兩檔（FinalData.js 維持正式原檔不動）→ 建版本 61 → 正式部署 @60→@61；未登入呼叫 `getPracticeProgress`／`bootstrap` 都回「登入已逾期」，doGet 正常。退版：`clasp update-deployment AKfycbxTcxKo... -V 60`。前端沒有改。之後新增任何「把使用者輸入寫進試算表」的程式，都要經過 `_cellSafe`。
-- 其他待決：F-01 密碼改存 hash，或由使用者正式接受風險；F-03 月報只寄公司網域信箱；以及報告列出的 Low 項目。
+- **F-01 密碼改存雜湊（使用者 11/26 決定）**：commit 52f500c。`Users.Password` 存 `h2$200$鹽$雜湊`（每人隨機鹽，SHA-256 重複 200 次；2000 次實測產生 1.4 秒／比對 1.1 秒太慢，200 次約 0.09 秒）。舊 `sha256:` 格式和還沒轉換的明碼仍可登入。`changePassword` 一律存雜湊、擋空白新密碼；**新密碼可以跟舊的一樣**（使用者決定不強制，也不加長度或英數規則）。**HR 做法不變**：新增同仁或重設密碼，就在 Password 欄打臨時密碼、IsFirstLogin 設 TRUE；排程 `hashPlainPasswords` 每 10 分鐘把明碼轉成雜湊（單次最多跑 4 分鐘，剩下的下一輪再轉）。轉換後 HR 就查不到密碼，只能重設。staging @21 `stagingCheckPasswordHash` 18/18 通過（暫時帳號 T9PW，測完刪除；沒有動其他測試帳號的密碼）。**還沒上正式**。上正式步驟：從 commit 取檔推正式 → 建版本、更新部署 → 正式編輯器執行 `previewPlainPasswords` 看筆數 → 使用者同意後執行 `hashPlainPasswords` → `setupPasswordHashTrigger`。注意：試算表的「版本記錄」仍看得到轉換前的明碼，有編輯權的人都能看。
+- 其他待決：F-03 月報只寄公司網域信箱，以及報告列出的 Low 項目。
 - staging「實驗_練習紀錄」留有一列修正前的測試資料（V-SC-E 自主，商品名與備註是公式 2／5），重建示範資料時會一起清掉。
 
 ## 6. 邊界（不要動的東西）
