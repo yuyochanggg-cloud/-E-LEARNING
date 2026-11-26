@@ -674,3 +674,55 @@ function _stagingUpsertUser(id, name, role, dept, pw) {
   sheet.appendRow(_buildRow(cols, { UserId: id, Email: email, Name: name, Role: role, CreatedAt: new Date(),
     Password: pw, IsFirstLogin: false, Department: dept }));
 }
+
+// 公式注入修正驗證（只限 staging，2026/11/26）：三條寫入路徑各寫一次「會被當公式」的字串，
+// 讀回確認存成原字串、不是公式，測完還原／刪除測試資料。
+function stagingCheckFormulaInjection() {
+  _assertStagingSpreadsheet();
+  const results = [];
+  const check = (name, ok, extra) => results.push(`${ok ? 'PASS' : 'FAIL'} ${name}${extra ? '：' + extra : ''}`);
+  check('_cellSafe 加單引號', _cellSafe('=1+1') === "'=1+1" && _cellSafe('+886') === "'+886" && _cellSafe('-x') === "'-x" && _cellSafe('@a') === "'@a");
+  check('_cellSafe 不動一般值', _cellSafe('abc') === 'abc' && _cellSafe(5) === 5 && _cellSafe('') === '' && _cellSafe(true) === true);
+
+  // 1. 通知信箱（updateNotifyEmail → setValue）：T0006，測完還原
+  const users = getSheet(SHEET_NAMES.USERS);
+  const uc = _readSheet(users);
+  let r6 = -1;
+  for (let i = 1; i < uc.rows.length; i++) if (String(uc.rows[i][uc.cols.UserId]).trim() === 'T0006') r6 = i + 1;
+  if (r6 > 0) {
+    const cell = users.getRange(r6, uc.cols.Email + 1);
+    const orig = cell.getValue();
+    const evil = '=CONCAT("t@","x.y")';
+    const res = updateNotifyEmail({ userId: 'T0006', email: evil, sessionToken: _generateSessionToken('T0006') });
+    SpreadsheetApp.flush();
+    check('信箱：API 接受（格式檢查通得過）', res.status === 'success', res.message);
+    check('信箱：存成原字串、不是公式', cell.getValue() === evil && cell.getFormula() === '', `值=${cell.getValue()} 公式=${cell.getFormula()}`);
+    cell.setValue(orig);
+  } else check('找到 T0006', false);
+
+  // 2. OJT 連結（submitOJT → _buildRow → appendRow）：T0001，測完刪列
+  const ojt = getSheet(SHEET_NAMES.OJT_TASKS);
+  const courseId = 'STG-FORMULA-' + Date.now();
+  const o = submitOJT({ userId: 'T0001', courseId, submitType: 'link', linkUrl: '=1+1', sessionToken: _generateSessionToken('T0001') });
+  SpreadsheetApp.flush();
+  const oc = _readSheet(ojt);
+  let ro = -1;
+  for (let i = oc.rows.length - 1; i >= 1; i--) if (String(oc.rows[i][oc.cols.CourseId]) === courseId) { ro = i + 1; break; }
+  if (ro > 0) {
+    const cell = ojt.getRange(ro, oc.cols.OjtFileUrl + 1);
+    check('OJT 連結：存成原字串、不是公式', o.status === 'success' && cell.getValue() === '=1+1' && cell.getFormula() === '', `值=${cell.getValue()} 公式=${cell.getFormula()}`);
+    ojt.deleteRow(ro);
+    _invalidateTableCache(OJT_TASKS_CACHE_KEY);
+  } else check('OJT 測試列有寫入', false, o.message);
+
+  // 3. 實驗表（_expAppend → setValues，自主練習、作答、月報紀錄都走這裡）：寫進「實驗_月報紀錄」，測完刪列
+  _expReportLog([{ '寄送時間': new Date(), '模式': '測試', '統計區間': 'FORMULA-TEST', '對象': '=2+3', '收件人': '@x', '結果': '-y' }]);
+  const lg = _expRead(EXP_SHEETS.REPORT_LOG, true);
+  const rl = lg.rows.length; // 最後一列
+  const c = lg.sheet.getRange(rl, lg.cols['對象'] + 1);
+  check('實驗表：存成原字串、不是公式', c.getValue() === '=2+3' && c.getFormula() === '' && lg.sheet.getRange(rl, lg.cols['收件人'] + 1).getValue() === '@x', `值=${c.getValue()} 公式=${c.getFormula()}`);
+  if (String(lg.sheet.getRange(rl, lg.cols['統計區間'] + 1).getValue()) === 'FORMULA-TEST') lg.sheet.deleteRow(rl);
+
+  Logger.log(results.join('\n'));
+  Logger.log(results.some(x => x.indexOf('FAIL') === 0) ? '❌ 有失敗項目' : `✅ 全部 ${results.length} 項通過`);
+}

@@ -246,9 +246,19 @@ function _buildRow(cols, values) {
   }
 
   const arr = [];
-  Object.keys(values).forEach(k => { arr[cols[k]] = values[k]; });
+  Object.keys(values).forEach(k => { arr[cols[k]] = _cellSafe(values[k]); });
   for (let i = 0; i < arr.length; i++) if (arr[i] === undefined) arr[i] = '';
   return arr;
+}
+
+// ------------------------------------------------------------
+// 2026/11/26 資安修正（試算表公式注入）：使用者輸入的字串若以 = + - @（或 tab、換行）開頭，
+// 直接寫進試算表會被當成公式執行（staging 實測：商品名「=1+1」存成 2）。
+// 前面加一個單引號，試算表就只當文字存；讀回來的值不含這個單引號，比對、顯示都不受影響。
+// 所有「把使用者輸入寫進試算表」的地方都要經過這裡（_buildRow、_expAppend、各個 setValue）。
+// ------------------------------------------------------------
+function _cellSafe(v) {
+  return (typeof v === 'string' && /^[=+\-@\t\r\n]/.test(v)) ? "'" + v : v;
 }
 
 // ============================================================
@@ -451,10 +461,10 @@ function changePassword({ userId, oldPassword, newPassword, notifyEmail, session
       return { status: 'error', message: '系統忙碌中，請稍後再試一次' };
     }
     try {
-      sheet.getRange(i + 1, cols.Password + 1).setValue(newPassword);
+      sheet.getRange(i + 1, cols.Password + 1).setValue(_cellSafe(String(newPassword)));
       sheet.getRange(i + 1, cols.IsFirstLogin + 1).setValue(false);
       if (notifyEmail) {
-        sheet.getRange(i + 1, cols.Email + 1).setValue(String(notifyEmail).trim());
+        sheet.getRange(i + 1, cols.Email + 1).setValue(_cellSafe(String(notifyEmail).trim()));
       }
     } finally {
       SpreadsheetApp.flush();
@@ -489,7 +499,7 @@ function updateNotifyEmail({ userId, email, sessionToken }) {
   try {
     for (let i = 1; i < rows.length; i++) {
       if (String(rows[i][cols.UserId]).trim() !== String(userId).trim()) continue;
-      sheet.getRange(i + 1, cols.Email + 1).setValue(String(email).trim());
+      sheet.getRange(i + 1, cols.Email + 1).setValue(_cellSafe(String(email).trim()));
       return { status: 'success' };
     }
     return { status: 'error', message: '找不到此員工' };
@@ -1188,7 +1198,7 @@ function reviewOJTTask({ rowNumber, taskId, newStatus, rejectReason, requestUser
     ojtSheet.getRange(targetRow, ojtCols.Status + 1).setValue(newStatus);
 
     if (newStatus === 'rejected' && ojtCols.RejectReason !== undefined) {
-      ojtSheet.getRange(targetRow, ojtCols.RejectReason + 1).setValue(String(rejectReason).trim());
+      ojtSheet.getRange(targetRow, ojtCols.RejectReason + 1).setValue(_cellSafe(String(rejectReason).trim()));
     }
 
     if (newStatus === 'approved') {

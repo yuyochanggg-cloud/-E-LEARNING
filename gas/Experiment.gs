@@ -250,7 +250,7 @@ function _expAppend(name, objs) {
   const width = Math.max.apply(null, Object.keys(cols).map(k => cols[k])) + 1;
   const values = objs.map(o => {
     const row = new Array(width).fill('');
-    Object.keys(o).forEach(k => { if (cols[k] !== undefined) row[cols[k]] = o[k]; });
+    Object.keys(o).forEach(k => { if (cols[k] !== undefined) row[cols[k]] = _cellSafe(o[k]); }); // 擋公式注入（Code.gs _cellSafe）
     return row;
   });
   sheet.getRange(sheet.getLastRow() + 1, 1, values.length, width).setValues(values);
