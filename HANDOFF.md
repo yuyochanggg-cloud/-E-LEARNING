@@ -177,3 +177,4 @@
 - **換主機時**：專案本身要是 git 專案，HANDOFF.md 隨程式碼一起 commit + push；換到另一台主機先 `git pull` 該專案，再讀 HANDOFF.md
 - 接手 session 的開場指令固定為：「讀 C:\Users\User\LxProjects\lx-elearning\HANDOFF.md，從第 5 節第一個動作開始」——接手模型不需要讀任何歷史對話
 - 任務完成即刪 HANDOFF.md（可重用的教訓先蒸餾進 memory）；它是拋棄式紀錄，不是長期文件
+- **11/27 開放週（使用者要求：還沒有教材的 6 款前兩週先不派）**：`實驗_品項` 新增選填欄「開放週」（空白＝第 1 週；依欄名讀，位置不限）。`_expComputeState` 派新款時排除開放週大於本週的款；已練過第 1 次的第 2 次不受影響；總目標、店長／督導進度、月報都不變（未完成品項照列）。要延後的款：SC-K3、TY-M1、TY-M4、GH-K4、YC-K1、YC-K3 填 3（第 3 週＝12/14 起）。教材提早好就改成 1。stagingSmokeExperiment 新增 3 項 → 49/49（跑完已 setupViewDemo）；node 模擬 8 週：前兩週沒派到延後款、16/16 完成。staging GAS @28。**11/27 已上正式 @67**（線上程式碼.js／Experiment.js 與 HEAD 相同；gas_safe_push 只改 Experiment.js；@66→@67；未登入呼叫回「登入已逾期」；退版 `-V 66`）。**正式「實驗_品項」由使用者手動加「開放週」欄並填 3**；沒加之前行為與原本相同。改完要即時生效可跑 `expClearCache`（否則最多 5 分鐘）。

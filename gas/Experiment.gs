@@ -328,7 +328,9 @@ function _expPracticeItems(store, categories, cfg, pitems) {
       guide:    String(r[cols['練習指引']] || '') || (code
         ? `打開下方 AI 對練，貼上良興代碼「${code}」找到「${name}」，扮演顧客完成一輪完整對話並拿到評分，再回來按「我已完成」。`
         : `打開下方 AI 對練，選「${name}」，扮演顧客完成一輪完整對話並拿到評分，再回來按「我已完成」。`),
-      url:      String(r[cols['練習網址']] || '').trim() || fallbackUrl
+      url:      String(r[cols['練習網址']] || '').trim() || fallbackUrl,
+      // 開放週（選填欄）：還沒有教材的款先不派，第 N 週起才進新款候選；空白＝第 1 週
+      openWeek: cols['開放週'] !== undefined ? (Number(r[cols['開放週']]) || 1) : 1
     });
   }
   return out;
@@ -443,7 +445,7 @@ function _expComputeState(uid, records, items, cfg, now) {
   if (slots > pinned.length) {
     const started = {};
     items.forEach(it => { if (before[it.id] > 0) started[it.category] = (started[it.category] || 0) + 1; });
-    const pool = items.filter(it => before[it.id] === 0)
+    const pool = items.filter(it => before[it.id] === 0 && (it.openWeek || 1) <= weekNo)
       .map(it => ({ it, h: _expHash01(uid + '|' + today + '|' + it.id) }));
     while (pinned.length + picks.length < slots && pool.length) {
       pool.sort((a, b) => (started[a.it.category] || 0) - (started[b.it.category] || 0) || a.h - b.h);

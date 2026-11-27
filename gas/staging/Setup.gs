@@ -253,6 +253,25 @@ function stagingSmokeExperiment() {
     st = _expComputeState('U', hist.concat([{ type: '正式', id: 'C', day: '2026-11-18' }]), its, cf, day);
     check('本週已練 1 次（前幾天）→ 今天只剩 1 個空位', st.todayList.join() === 'A', st.todayList.join());
   }
+  // 開放週：還沒有教材的款，開放週之前不派（純計算）
+  {
+    const its = [{ id: 'A', category: 'X', openWeek: 3 }, { id: 'B', category: 'Y', openWeek: 3 },
+                 { id: 'C', category: 'X' }, { id: 'D', category: 'Y', openWeek: 1 }];
+    const cf = { start: new Date('2026-11-30T00:00:00+08:00'), perWeek: 2, dailyMax: 2, perItem: 2 };
+    let ok = true, seen = [];
+    for (let d = 0; d < 14; d++) { // 第 1–2 週每一天
+      const day = new Date(new Date('2026-11-30T10:00:00+08:00').getTime() + d * 86400000);
+      const l = _expComputeState('U' + d, [], its, cf, day).todayList;
+      seen = seen.concat(l);
+      if (l.indexOf('A') !== -1 || l.indexOf('B') !== -1) ok = false;
+    }
+    check('第 1–2 週不派開放週＝3 的款', ok && seen.length > 0, seen.join());
+    const w3 = _expComputeState('U', [{ type: '正式', id: 'C', day: '2026-11-30' }, { type: '正式', id: 'C', day: '2026-12-01' },
+                                      { type: '正式', id: 'D', day: '2026-12-07' }, { type: '正式', id: 'D', day: '2026-12-08' }],
+                                its, cf, new Date('2026-12-14T10:00:00+08:00'));
+    check('第 3 週起開放週＝3 的款進入清單', w3.todayList.join().split(',').sort().join() === 'A,B', w3.todayList.join());
+    check('開放週不影響總目標（4 款 × 2 次）', w3.formalTarget === 8, w3.formalTarget);
+  }
   check('本週練滿後不能再正式回報', submitPractice({ userId: 'T0004', itemId: other.id, kind: 'formal', sessionToken: tk }).status === 'error');
 
   // 補「過去日期」的正式紀錄到剩 1 次，模擬前幾週
