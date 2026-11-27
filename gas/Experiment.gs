@@ -272,7 +272,11 @@ function _expConfig() {
   const botUrl = String(map['練習網址'] || '').trim();
   // 月報寄送：只有明確填「正式」才寄給店長與督導；空白或其他值一律當「測試」（只寄給執行者自己）
   const reportMode = String(map['月報寄送'] || '').trim() === '正式' ? '正式' : '測試';
-  return { start, end, totalWeeks, perItem, dailyMax, perWeek, botUrl, reportMode };
+  // 月報副本：督導月報另外寄給這些信箱（不改任何人的角色權限）。逗號、頓號、分號或空白分隔
+  const ccRaw = String(map['月報副本'] || '').split(/[,，、;；\s]+/).map(s => s.trim()).filter(Boolean);
+  const reportCc = ccRaw.filter(_isValidEmail);
+  const reportCcBad = ccRaw.filter(s => !_isValidEmail(s));
+  return { start, end, totalWeeks, perItem, dailyMax, perWeek, botUrl, reportMode, reportCc, reportCcBad };
 }
 
 function _expWeekNo(start, when) {
@@ -752,6 +756,8 @@ function setupExperimentSheets() {
   // 月報寄送開關（後來加的設定）：沒有這一列才補，預設「測試」
   const cfgKeys = cfg.getRange(1, 1, cfg.getLastRow(), 1).getValues().map(r => String(r[0]).trim());
   if (cfgKeys.indexOf('月報寄送') === -1) cfg.getRange(cfg.getLastRow() + 1, 1, 1, 2).setValues([['月報寄送', '測試']]);
+  // 月報副本（後來加的設定）：督導月報另外寄給這些信箱，預設空白
+  if (cfgKeys.indexOf('月報副本') === -1) cfg.getRange(cfg.getLastRow() + 1, 1, 1, 2).setValues([['月報副本', '']]);
 
   // 定案的門市分派與選品：表是空的才寫入，已有資料不動
   const assign = ss.getSheetByName(EXP_SHEETS.ASSIGN);
@@ -1289,11 +1295,16 @@ function _expBuildReport(now, from, to) {
     n ? `${Math.round(tot(s => s.onTrack) / n * 100)}%（${tot(s => s.onTrack)}/${n}）` : '-',
     tot(s => s.allDone), tot(s => s.preDone), tot(s => s.postDone)]);
   const intro = `督導您好：以下是 ${label} 各門市的 AI 門市對練統計（依達標率由低到高排列）。${where}`;
+  // 收件人＝督導＋「實驗_設定」的月報副本（去重）；副本格式錯的列在「沒填信箱」讓寄件紀錄看得到
+  const sup = split(supervisors);
+  const seen = {};
+  sup.to = sup.to.concat(cfg0.reportCc).filter(e => { const k = e.toLowerCase(); if (seen[k]) return false; seen[k] = true; return true; });
+  sup.noEmail = sup.noEmail.concat(cfg0.reportCcBad.map(s => '月報副本格式錯誤：' + s));
   mails.push(Object.assign({
     kind: '督導', store: '', subject: `【良興雲端學院】AI 門市對練${kindName}｜各店總覽（${label}）`,
     html: `<p>${_expEsc(intro)}</p>${_expHtmlTable(allHead, allRows)}<p style="font-size:13px">⚠＝門市人均完成低於應有進度。各店同仁明細請到網站查看。</p>${foot}`,
     text: `${intro}\n\n${_expTextTable(allHead, allRows)}\n\n⚠＝門市人均完成低於應有進度。\n${rule}\n即時進度：${url}`
-  }, split(supervisors)));
+  }, sup));
 
   return { label, final, mails };
 }

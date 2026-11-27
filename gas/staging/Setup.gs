@@ -532,6 +532,17 @@ function stagingSmokeTeam() {
   check('檔期中 → 一般月報', rep.final === false && mailOf('督導').subject.indexOf('月報') !== -1);
   check('設定沒填月報寄送 → 測試', c2.reportMode === '測試');
 
+  // ---- 月報副本：只加在督導信、去重、格式錯的會被列出 ----
+  _stagingSetConfig('月報副本', 'cc-test@example.com、not-an-email；' + staffMail.toUpperCase());
+  const repCc = _expBuildReport(now, day(40), new Date(now.getTime() + 1));
+  const supCc = repCc.mails.find(x => x.kind === '督導');
+  check('月報副本：督導信多寄副本信箱', supCc.to.indexOf('cc-test@example.com') !== -1, supCc.to.join(','));
+  check('月報副本：跟督導重複的信箱不重寄', supCc.to.filter(e => e.toLowerCase() === staffMail.toLowerCase()).length === 1, supCc.to.join(','));
+  check('月報副本：格式錯的列出來', supCc.noEmail.some(s => s.indexOf('not-an-email') !== -1));
+  check('月報副本：店長信不受影響', repCc.mails.filter(x => x.kind === '店長').every(x => x.to.indexOf('cc-test@example.com') === -1));
+  _stagingSetConfig('月報副本', '');
+  check('月報副本空白 → 督導信只寄督導', _expBuildReport(now, day(40), new Date(now.getTime() + 1)).mails.find(x => x.kind === '督導').to.indexOf('cc-test@example.com') === -1);
+
   // ---- 重複寄送保護 ----
   const label = 'TEST-' + Date.now();
   check('沒寄過 → 可以寄', !_expReportAlreadySent(label));
