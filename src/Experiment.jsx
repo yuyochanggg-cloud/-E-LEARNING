@@ -151,7 +151,7 @@ async function copyText(text) {
   }
 }
 
-function CopyName({ text }) {
+function CopyName({ text, label = '品名' }) {
   const [done, setDone] = useState(false);
   const copy = async () => {
     await copyText(text);
@@ -159,10 +159,10 @@ function CopyName({ text }) {
     setTimeout(() => setDone(false), 1500);
   };
   return (
-    <button type="button" onClick={copy} title="複製品名"
+    <button type="button" onClick={copy} title={`複製${label}`}
       className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 shrink-0">
       {done ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-      {done ? '已複製' : '複製品名'}
+      {done ? '已複製' : `複製${label}`}
     </button>
   );
 }
@@ -176,8 +176,8 @@ function BotPanel({ bot, onClose }) {
       <div className="flex items-center justify-between gap-2 p-3 bg-indigo-50">
         <span className="flex items-center gap-2 min-w-0">
           <span className="font-bold text-indigo-800 text-sm select-text truncate">AI 對練：{bot.name}</span>
-          {bot.copyName && <span className="text-xs text-indigo-600 hidden sm:inline">品名已複製，可直接貼到對話框</span>}
-          {bot.copyName && <CopyName text={bot.copyName} />}
+          {bot.copyName && <span className="text-xs text-indigo-600 hidden sm:inline">{bot.copyLabel || '品名'}已複製，可直接貼到對話框</span>}
+          {bot.copyName && <CopyName text={bot.copyName} label={bot.copyLabel || '品名'} />}
         </span>
         <button onClick={onClose} className="text-sm font-bold text-indigo-700 hover:underline shrink-0">收起</button>
       </div>
@@ -194,6 +194,7 @@ function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '
       <div>
         <span className="text-xs font-bold text-blue-600">{item.category}</span>
         <h4 className="text-lg font-black text-slate-900 select-text">{item.name}</h4>
+        {item.code && <p className="text-xs text-slate-500 select-text">良興代碼：<span className="font-mono">{item.code}</span></p>}
         {perItem && (
           <p className="text-xs text-slate-500 mt-1">
             {item.isSecond
@@ -206,8 +207,8 @@ function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '
       <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line flex-1">{item.guide || '（練習指引準備中）'}</p>
       <div className="flex flex-wrap gap-2">
         {!doneToday && (
-          <button onClick={() => { copyText(item.name); onOpenBot(item); }} className="flex items-center gap-1 px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold text-sm hover:bg-indigo-50">
-            <MessageCircle className="w-4 h-4" /> 複製品名並開啟 AI 對練
+          <button onClick={() => { copyText(item.code || item.name); onOpenBot(item); }} className="flex items-center gap-1 px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold text-sm hover:bg-indigo-50">
+            <MessageCircle className="w-4 h-4" /> {item.code ? '複製良興代碼並開啟 AI 對練' : '複製品名並開啟 AI 對練'}
           </button>
         )}
         <button onClick={() => onReport(item)} disabled={sending || doneToday}
@@ -215,7 +216,7 @@ function ItemCard({ item, perItem, onOpenBot, onReport, sending, reportLabel = '
           {doneToday ? '✓ 今天已完成' : (sending ? '送出中...' : reportLabel)}
         </button>
       </div>
-      {open && <BotPanel bot={{ ...item, copyName: item.name }} onClose={onClose} />}
+      {open && <BotPanel bot={{ ...item, copyName: item.code || item.name, copyLabel: item.code ? '良興代碼' : '品名' }} onClose={onClose} />}
     </div>
   );
 }

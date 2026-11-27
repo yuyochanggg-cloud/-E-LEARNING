@@ -318,11 +318,16 @@ function _expPracticeItems(store, categories, cfg, pitems) {
     if (itemStore && itemStore !== store) continue;
     if (!(enabled === true || String(enabled).toUpperCase() === 'TRUE')) continue;
     const name = String(r[cols['品項名稱']] || '');
+    // 良興代碼：AI 對練用代碼查商品比用品名準，前端按鈕優先複製代碼
+    const code = cols['良興代碼'] !== undefined ? String(r[cols['良興代碼']] || '').trim() : '';
     out.push({
       id:       String(r[cols['品項編號']]).trim(),
       category: cat,
       name,
-      guide:    String(r[cols['練習指引']] || '') || `打開下方 AI 對練，選「${name}」，扮演顧客完成一輪完整對話並拿到評分，再回來按「我已完成」。`,
+      code,
+      guide:    String(r[cols['練習指引']] || '') || (code
+        ? `打開下方 AI 對練，貼上良興代碼「${code}」找到「${name}」，扮演顧客完成一輪完整對話並拿到評分，再回來按「我已完成」。`
+        : `打開下方 AI 對練，選「${name}」，扮演顧客完成一輪完整對話並拿到評分，再回來按「我已完成」。`),
       url:      String(r[cols['練習網址']] || '').trim() || fallbackUrl
     });
   }
@@ -537,7 +542,7 @@ function getExperimentStatus({ userId, sessionToken }) {
   if (!ctx.hasTask) return { status: 'success', data: base };
 
   const view = it => ({
-    id: it.id, name: it.name, category: it.category, guide: it.guide, url: it.url,
+    id: it.id, name: it.name, code: it.code || '', category: it.category, guide: it.guide, url: it.url,
     count: state.count[it.id], doneToday: !!state.todayDone[it.id],
     firstDay: state.firstDay[it.id] ? state.firstDay[it.id].replace(/-/g, '/') : '',
     isSecond: state.pinned.indexOf(it.id) !== -1
